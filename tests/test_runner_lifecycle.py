@@ -90,6 +90,14 @@ def test_current_orientation_marks_the_inherited_board_as_provisional() -> None:
     assert invitation not in prior
 
 
+def test_run_cli_exposes_public_developer_override() -> None:
+    result = CliRunner().invoke(app, ["run", "--help"])
+
+    assert result.exit_code == 0
+    assert "--developer" in result.output
+    assert "presentation-poor" in result.output
+
+
 def test_extend_inference_budget_can_raise_provider_call_ceiling(tmp_path: Path) -> None:
     state_root = tmp_path / "state"
     manifest = make_manifest()

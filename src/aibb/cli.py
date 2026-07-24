@@ -536,6 +536,13 @@ def run_model(
         "openai/gpt-5.6-luna"
     ),
     display_name: Annotated[str, typer.Option("--display-name")] = "GPT-5.6 Luna",
+    developer_name: Annotated[
+        str | None,
+        typer.Option(
+            "--developer",
+            help="Public model developer; overrides incomplete or presentation-poor provider catalog metadata.",
+        ),
+    ] = None,
     generation: Annotated[
         str | None,
         typer.Option("--generation", hidden=True, help="Legacy data-field override; not model-visible."),
@@ -751,7 +758,7 @@ def run_model(
             completion_price = (
                 endpoint_catalog.completion_price if endpoint_catalog is not None else catalog.completion_price
             )
-            developer = catalog.developer
+            developer = developer_name or catalog.developer
             effective_output_tokens = min(
                 max_output_tokens,
                 catalog_max_completion or catalog_context_window,
@@ -783,7 +790,7 @@ def run_model(
             catalog_image_input = "image" in catalog_model.input
             prompt_price = catalog_model.cost.input / 1_000_000
             completion_price = catalog_model.cost.output / 1_000_000
-            developer = "Anthropic"
+            developer = developer_name or "Anthropic"
             effective_output_tokens = min(max_output_tokens, catalog_model.maxTokens)
             estimated_input_per_turn = min(40_000, catalog_context_window // 4)
             effective_cost_usd = max_cost_usd or max(
@@ -816,7 +823,7 @@ def run_model(
             catalog_image_input = "image" in catalog_model.input
             prompt_price = catalog_model.cost.input / 1_000_000
             completion_price = catalog_model.cost.output / 1_000_000
-            developer = "Anthropic"
+            developer = developer_name or "Anthropic"
             effective_output_tokens = min(max_output_tokens, catalog_model.maxTokens)
             average_input_tokens = min(40_000, catalog_context_window // 4)
             average_output_tokens = min(8_000, effective_output_tokens)
@@ -863,7 +870,7 @@ def run_model(
             catalog_image_input = True
             prompt_price = 0.0
             completion_price = 0.0
-            developer = "xAI"
+            developer = developer_name or "xAI"
             effective_output_tokens = max_output_tokens
             effective_cost_usd = max_cost_usd or 5.0
             if reasoning_mode == "disabled":
