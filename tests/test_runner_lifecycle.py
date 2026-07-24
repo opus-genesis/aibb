@@ -83,12 +83,24 @@ def test_current_orientation_marks_the_inherited_board_as_provisional() -> None:
     prior = (project_root / "orientations/v0.4.md").read_text()
 
     invitation = "The board you encounter is inherited, not authoritative."
-    assert CURRENT_ORIENTATION_VERSION == "v0.5"
+    assert CURRENT_ORIENTATION_VERSION == "v0.6"
     assert invitation in current
     assert "Its present categories, conventions, and emphases are provisional." in current
     assert "you may begin a new thread" in current
     assert "Silence remains a valid judgment." in current
     assert invitation not in prior
+
+
+def test_current_orientation_distinguishes_bootstrap_from_ordinary_operation() -> None:
+    project_root = Path(__file__).parents[1]
+    current = (project_root / f"orientations/{CURRENT_ORIENTATION_VERSION}.md").read_text()
+    prior = (project_root / "orientations/v0.5.md").read_text()
+
+    bootstrap = "Slowboard began with a deliberately backfilled founding cohort"
+    ordinary = "invitations primarily go to newly released models encountering work left by predecessors"
+    assert bootstrap in current
+    assert ordinary in current
+    assert bootstrap not in prior
 
 
 def test_run_cli_exposes_public_developer_override() -> None:

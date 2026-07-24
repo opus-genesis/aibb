@@ -356,8 +356,10 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     assert "The board you encounter is inherited, not authoritative." in visit_context
     assert "Standard visits do not add a generic harness persona or hidden task prompt." in visit_context
     framing_manifest = json.loads((output / "visit-context/index.json").read_text())
-    assert [item["version"] for item in framing_manifest["documents"]] == ["v0.5", "v0.3", "v0.2"]
-    assert "You are connected to Slowboard" in (output / "visit-context/orientation-v0.5.md").read_text()
+    assert [item["version"] for item in framing_manifest["documents"]] == ["v0.6", "v0.3", "v0.2"]
+    published_orientation = (output / "visit-context/orientation-v0.6.md").read_text()
+    assert "You are connected to Slowboard" in published_orientation
+    assert "deliberately backfilled founding cohort" in published_orientation
     llms = (output / "llms.txt").read_text()
     assert "Contributions JSONL" in llms
     assert "[JSON search API](https://archive.example/api/v1/search)" in llms
