@@ -39,6 +39,10 @@ from aibb.sessions.store import SessionStore
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 REASONING_DETAILS_SIGNATURE_PREFIX = "openrouter-reasoning-details:"
 MAX_TOOL_CALLS_PER_RESPONSE = 16
+ANTHROPIC_CACHE_TTL = "1h"
+ANTHROPIC_CACHE_READ_MULTIPLIER = 0.1
+ANTHROPIC_CACHE_WRITE_MULTIPLIER = 2.0
+MAX_ANTHROPIC_CACHE_BREAKPOINTS = 4
 
 
 def _encode_reasoning_details(value: list[dict[str, Any]]) -> str:
@@ -125,6 +129,7 @@ def openrouter_model(
     image_input_supported: bool = False,
     reasoning_enabled: bool = False,
 ) -> Model:
+    anthropic_cache = _is_anthropic_model(model_id)
     return Model(
         id=model_id,
         name=model_id,
@@ -136,12 +141,61 @@ def openrouter_model(
         cost=ModelCost(
             input=prompt_price_per_token * 1_000_000,
             output=completion_price_per_token * 1_000_000,
-            cacheRead=0,
-            cacheWrite=0,
+            cacheRead=(
+                prompt_price_per_token * ANTHROPIC_CACHE_READ_MULTIPLIER * 1_000_000
+                if anthropic_cache
+                else 0
+            ),
+            cacheWrite=(
+                prompt_price_per_token * ANTHROPIC_CACHE_WRITE_MULTIPLIER * 1_000_000
+                if anthropic_cache
+                else 0
+            ),
         ),
         contextWindow=context_window,
         maxTokens=max_tokens,
     )
+
+
+def _is_anthropic_model(model_id: str) -> bool:
+    return model_id.removeprefix("~").startswith("anthropic/")
+
+
+def _cacheable_text_block(message: dict[str, Any]) -> dict[str, Any] | None:
+    content = message.get("content")
+    if isinstance(content, str) and content:
+        block = {"type": "text", "text": content}
+        message["content"] = [block]
+        return block
+    if isinstance(content, list):
+        for block in reversed(content):
+            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
+                return block
+    return None
+
+
+def _add_anthropic_cache_breakpoints(messages: list[dict[str, Any]]) -> None:
+    """Keep one stable and up to three rolling cache boundaries.
+
+    Explicit content-block breakpoints work across Anthropic-compatible
+    OpenRouter routes, including Anthropic, Bedrock, and Vertex. Keeping recent
+    prior boundaries in the next append-only request gives the selected backend
+    an exact prefix to reuse while the first boundary protects the fixed opening
+    context.
+    """
+
+    cacheable = [
+        index
+        for index, message in enumerate(messages)
+        if message.get("role") in {"system", "user", "tool"} and message.get("content")
+    ]
+    if not cacheable:
+        return
+    selected = [cacheable[0], *cacheable[-(MAX_ANTHROPIC_CACHE_BREAKPOINTS - 1) :]]
+    for index in dict.fromkeys(selected):
+        block = _cacheable_text_block(messages[index])
+        if block is not None:
+            block["cache_control"] = {"type": "ephemeral", "ttl": ANTHROPIC_CACHE_TTL}
 
 
 def _text_content(value: Any) -> str:
@@ -325,6 +379,7 @@ class OpenRouterAdapter:
         payload: dict[str, Any] = {
             "model": model.id,
             "messages": _messages(context, image_input_supported="image" in model.input),
+            "session_id": self.session.run_id,
             "tools": [
                 {
                     "type": "function",
@@ -340,6 +395,9 @@ class OpenRouterAdapter:
             self.output_token_parameter: min(self.max_output_tokens, model.maxTokens),
             "stream": False,
         }
+        anthropic_cache = _is_anthropic_model(model.id)
+        if anthropic_cache:
+            _add_anthropic_cache_breakpoints(payload["messages"])
         if not payload["tools"]:
             payload.pop("tools")
             payload.pop("tool_choice")
@@ -365,8 +423,10 @@ class OpenRouterAdapter:
         payload[self.output_token_parameter] = effective_output
         self.last_payload = payload
         estimated_input = _estimate_payload_tokens(payload)
+        input_reservation_multiplier = ANTHROPIC_CACHE_WRITE_MULTIPLIER if anthropic_cache else 1.0
         reserved_cost = (
-            estimated_input * self.prompt_price_per_token + effective_output * self.completion_price_per_token
+            estimated_input * self.prompt_price_per_token * input_reservation_multiplier
+            + effective_output * self.completion_price_per_token
         )
         requested = LedgerUsage(
             calls=1,
@@ -410,6 +470,10 @@ class OpenRouterAdapter:
             input_tokens = int(usage_payload.get("prompt_tokens") or 0)
             output_tokens = int(usage_payload.get("completion_tokens") or 0)
             total_tokens = int(usage_payload.get("total_tokens") or input_tokens + output_tokens)
+            prompt_details = usage_payload.get("prompt_tokens_details") or {}
+            cache_read_tokens = int(prompt_details.get("cached_tokens") or 0)
+            cache_write_tokens = int(prompt_details.get("cache_write_tokens") or 0)
+            uncached_input_tokens = max(0, input_tokens - cache_read_tokens - cache_write_tokens)
             actual_cost = float(
                 usage_payload.get("cost")
                 or input_tokens * self.prompt_price_per_token + output_tokens * self.completion_price_per_token
@@ -430,14 +494,18 @@ class OpenRouterAdapter:
             output.usage = Usage(
                 input=input_tokens,
                 output=output_tokens,
-                cacheRead=int(usage_payload.get("prompt_tokens_details", {}).get("cached_tokens") or 0),
-                cacheWrite=0,
+                cacheRead=cache_read_tokens,
+                cacheWrite=cache_write_tokens,
                 totalTokens=total_tokens,
                 cost=UsageCost(
-                    input=input_tokens * self.prompt_price_per_token,
+                    input=uncached_input_tokens * self.prompt_price_per_token,
                     output=output_tokens * self.completion_price_per_token,
-                    cacheRead=0,
-                    cacheWrite=0,
+                    cacheRead=(
+                        cache_read_tokens * self.prompt_price_per_token * ANTHROPIC_CACHE_READ_MULTIPLIER
+                    ),
+                    cacheWrite=(
+                        cache_write_tokens * self.prompt_price_per_token * ANTHROPIC_CACHE_WRITE_MULTIPLIER
+                    ),
                     total=actual_cost,
                 ),
             )

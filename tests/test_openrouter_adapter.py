@@ -14,6 +14,7 @@ from aibb.harness import AibbHarnessEngine, build_context_envelope
 from aibb.harness.openrouter import (
     MAX_TOOL_CALLS_PER_RESPONSE,
     OpenRouterAdapter,
+    _add_anthropic_cache_breakpoints,
     _estimate_payload_tokens,
     _parse_tool_arguments,
     openrouter_model,
@@ -92,6 +93,19 @@ def test_payload_estimate_counts_image_tokens_without_tokenizing_base64_bytes() 
 
     assert estimate >= ESTIMATED_IMAGE_INPUT_TOKENS
     assert estimate < ESTIMATED_IMAGE_INPUT_TOKENS + 1_000
+
+
+def test_anthropic_cache_breakpoints_keep_fixed_opening_and_three_recent_boundaries() -> None:
+    messages = [{"role": "user", "content": f"message-{index}"} for index in range(10)]
+
+    _add_anthropic_cache_breakpoints(messages)
+
+    marked = [
+        index
+        for index, message in enumerate(messages)
+        if isinstance(message["content"], list) and "cache_control" in message["content"][-1]
+    ]
+    assert marked == [0, 7, 8, 9]
 
 
 @pytest.mark.asyncio
@@ -202,6 +216,8 @@ async def test_openrouter_adapter_captures_payload_response_usage_and_tools(tmp_
     await engine.send_curator_message("Welcome.")
 
     assert len(requests) == 2
+    assert {request["session_id"] for request in requests} == {manifest.run_id}
+    assert "cache_control" not in json.dumps(requests)
     assert requests[0]["messages"][0]["content"].startswith("Explore. Silence is valid.")
     assert requests[0]["reasoning"] == {"effort": "high", "exclude": False}
     assert requests[0]["provider"] == {
@@ -233,6 +249,131 @@ async def test_openrouter_adapter_captures_payload_response_usage_and_tools(tmp_
     events_text = (tmp_path / "session/events.jsonl").read_text()
     assert "private-test-key" not in events_text
     assert "response-2" in events_text
+
+
+@pytest.mark.asyncio
+async def test_anthropic_openrouter_requests_use_sticky_session_and_rolling_cache_breakpoints(
+    tmp_path: Path,
+) -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if len(requests) == 1:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-status",
+                        "type": "function",
+                        "function": {"name": "archive_status", "arguments": "{}"},
+                    }
+                ],
+            }
+            prompt_details = {"cached_tokens": 0, "cache_write_tokens": 4_800}
+        else:
+            message = {"role": "assistant", "content": "Finished."}
+            prompt_details = {"cached_tokens": 4_800, "cache_write_tokens": 200}
+        return httpx.Response(
+            200,
+            json={
+                "id": f"response-{len(requests)}",
+                "model": "anthropic/claude-opus-5",
+                "provider": "Anthropic",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": message,
+                        "finish_reason": "tool_calls" if len(requests) == 1 else "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 5_000,
+                    "completion_tokens": 20,
+                    "total_tokens": 5_020,
+                    "cost": 0.02,
+                    "prompt_tokens_details": prompt_details,
+                },
+            },
+        )
+
+    async def archive_status(
+        _tool_call_id: str,
+        _arguments: Any,
+        _signal: Any = None,
+        _on_update: Any = None,
+    ) -> AgentToolResult:
+        return AgentToolResult(content=[TextContent(text='{"published": 1}')], details={"published": 1})
+
+    tool = AgentTool(
+        name="archive_status",
+        label="Archive status",
+        description="Read archive status.",
+        parameters={"type": "object", "properties": {}, "additionalProperties": False},
+        execute=archive_status,
+        executionMode="sequential",
+    )
+    manifest = make_manifest()
+    ledger = BudgetLedger(tmp_path / "mcp/budgets.json", manifest)
+    session = SessionStore(tmp_path / "session", manifest.run_id)
+    adapter = OpenRouterAdapter(
+        api_key="private-test-key",
+        ledger=ledger,
+        session=session,
+        max_output_tokens=500,
+        prompt_price_per_token=0.000005,
+        completion_price_per_token=0.000025,
+        app_url="https://archive.example/",
+        transport=httpx.MockTransport(handler),
+    )
+    model = openrouter_model(
+        "anthropic/claude-opus-5",
+        context_window=1_000_000,
+        max_tokens=500,
+        prompt_price_per_token=0.000005,
+        completion_price_per_token=0.000025,
+    )
+    engine = AibbHarnessEngine(
+        model=model,
+        system_prompt="",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "A long stable opening." * 500}],
+                "timestamp": 1,
+            }
+        ],
+        tools=[tool],
+        stream_fn=adapter,
+    )
+
+    await engine.begin()
+
+    assert len(requests) == 2
+    assert {request["session_id"] for request in requests} == {manifest.run_id}
+    first_opening = requests[0]["messages"][0]["content"]
+    second_opening = requests[1]["messages"][0]["content"]
+    assert first_opening == second_opening
+    assert first_opening[-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    second_tool_result = requests[1]["messages"][-1]
+    assert second_tool_result["role"] == "tool"
+    assert second_tool_result["content"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert sum(
+        1
+        for message in requests[1]["messages"]
+        for block in (message["content"] if isinstance(message.get("content"), list) else [])
+        if isinstance(block, dict) and "cache_control" in block
+    ) == 2
+    assert model.cost.cacheRead == pytest.approx(0.5)
+    assert model.cost.cacheWrite == pytest.approx(10)
+    assistant_messages = [message for message in engine.messages if message.role == "assistant"]
+    assert assistant_messages[0].usage.cacheWrite == 4_800
+    assert assistant_messages[-1].usage.cacheRead == 4_800
+    assert assistant_messages[-1].usage.cacheWrite == 200
+    assert assistant_messages[-1].usage.cost.cacheRead == pytest.approx(0.0024)
+    assert assistant_messages[-1].usage.cost.cacheWrite == pytest.approx(0.002)
 
 
 @pytest.mark.asyncio

@@ -113,8 +113,12 @@ Typical production launch:
 
 Those budgets are examples, not universal defaults. Scale them to the model's
 context, pricing, expected reasoning trace, and contribution ceiling. A large
-system prompt is counted on every provider request even when upstream KV cache
-makes most of it cheaper.
+system prompt remains part of every provider request and the context-window
+accounting even when upstream prompt caching makes repeated input cheaper.
+OpenRouter runs use the run ID for sticky routing; Anthropic routes must report
+cache-write tokens on the first eligible turn and substantial cache-read tokens
+on later append-only turns. Treat repeated zero-cache usage on a long prefix as
+a transport regression.
 
 Immediately inspect the emitted ready record and manifest. Verify run ID,
 publication lane, provider/model ID, display identity, context window, output

@@ -254,6 +254,14 @@ class RunEventRenderer:
             input_tokens = usage.get("prompt_tokens", usage.get("input", "?"))
             output_tokens = usage.get("completion_tokens", usage.get("output", "?"))
             total_tokens = usage.get("total_tokens", usage.get("totalTokens", "?"))
+            prompt_details = usage.get("prompt_tokens_details") or {}
+            cache_read_tokens = prompt_details.get("cached_tokens")
+            cache_write_tokens = prompt_details.get("cache_write_tokens")
+            cache_text = ""
+            if isinstance(cache_read_tokens, int) and cache_read_tokens > 0:
+                cache_text += f" · {cache_read_tokens} cache-read"
+            if isinstance(cache_write_tokens, int) and cache_write_tokens > 0:
+                cache_text += f" · {cache_write_tokens} cache-write"
             reasoning_tokens = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
             reasoning_text = ""
             if isinstance(reasoning_tokens, int) and reasoning_tokens > 0:
@@ -270,7 +278,7 @@ class RunEventRenderer:
                 )
             self.console.print(
                 f"[dim]{input_tokens} input + {output_tokens} output{reasoning_text} = "
-                f"{total_tokens} tokens{cost_text}[/dim]"
+                f"{total_tokens} tokens{cache_text}{cost_text}[/dim]"
             )
 
     def render(self, event: dict[str, Any]) -> bool:

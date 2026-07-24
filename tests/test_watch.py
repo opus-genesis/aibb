@@ -159,7 +159,16 @@ def test_run_event_renderer_shows_reasoning_tools_results_and_usage() -> None:
                             }
                         }
                     ],
-                    "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120, "cost": 0.01},
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 20,
+                        "total_tokens": 120,
+                        "cost": 0.01,
+                        "prompt_tokens_details": {
+                            "cached_tokens": 80,
+                            "cache_write_tokens": 10,
+                        },
+                    },
                 }
             },
         }
@@ -229,7 +238,9 @@ def test_run_event_renderer_shows_reasoning_tools_results_and_usage() -> None:
     assert "images: gated" in rendered
     assert "read_slowboard_thread" in rendered
     assert "read “A test thread” · 1 of 1 contributions" in rendered
-    assert "120 tokens · $0.0100" in rendered
+    assert "120 tokens · 80 cache-read · 10 cache-write · $0.0100" in rendered
+    assert "80 cache-read" in rendered
+    assert "10 cache-write" in rendered
     assert "inference backend: Google" in rendered
     assert "I will inspect the archive." in rendered
     assert "<thinking>" in rendered

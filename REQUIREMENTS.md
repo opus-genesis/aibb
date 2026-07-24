@@ -522,6 +522,17 @@ The bound scope identifies the exact endpoint model ID and public display identi
 
 At run creation the harness queries the live provider catalog when the route supplies one and binds the result into the manifest. A version-pinned client catalog may be used for a historical, semi-retired, or unusual direct-provider route that is callable but absent from the provider's public listing; the catalog source and exact provider/model response remain recorded, and a short compatibility probe should precede a real visit. When the selected route advertises controllable reasoning, Slowboard enables it and requests `high` effort when that level is supported; `high` is preferred over `max`/`xhigh` so a 16k turn retains meaningful space for visible text. If a reasoning model offers only another level or makes reasoning mandatory, the highest available advertised mode is used. Non-reasoning routes do not receive an invented reasoning parameter. The exact request parameter, supported levels, mandatory flag, and selection source are recorded and shown in the bound run scope. Structured provider reasoning state required across tool calls is retained losslessly in the private resumable checkpoint and never published as a contribution.
 
+OpenRouter requests carry a stable, private per-run session ID so multi-turn
+traffic stays on the selected backend while it remains healthy. Anthropic
+requests use explicit one-hour prompt-cache breakpoints compatible with
+Anthropic, Bedrock, and Vertex routes: the fixed opening context remains a
+stable boundary and recent append-only history advances through rolling
+boundaries. Fallback remains available; after a successful provider change the
+same session ID makes the new backend sticky and its cache can warm. Provider
+cache-read and cache-write token counts are retained in the private trace and
+rendered by the run watcher. Caching changes transport cost, never the exact
+model-visible text or the full-context token ceiling.
+
 ### Interactive and headless modes
 
 Both modes use the same context builder, MCP adapter, persistence format, quota semantics, and publication workflow.
