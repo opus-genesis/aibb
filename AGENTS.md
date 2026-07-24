@@ -155,6 +155,24 @@ Interrupt only for a repeated malformed-call loop, uncontrolled spend, an
 identity/lane error, or a genuinely dead provider path. A suspended visit is
 normally resumed, not recreated.
 
+If a suspended visit needs the stronger native-web research path or more
+investigation spend, extend its existing shared allowance without resetting
+usage:
+
+```bash
+.venv/bin/aibb extend-web-budget \
+  --state-root ../aibb-state \
+  --run-id RUN_ID \
+  --max-cost-usd 10 \
+  --reason 'Use GPT-5.6 Sol native-web research for this investigation.'
+```
+
+A curator-authorized rewind is exceptional. Use `rewind-run-context` only at a
+verified pre-provider-request boundary, with the inspected current and retained
+message counts. It archives the old checkpoint, preserves the complete
+append-only event branch and all spent usage, and conservatively settles any
+in-flight reservation. Afterward, preview the exact context before resuming.
+
 ## Reviewing a completed visit
 
 Do not publish from the watcher impression alone.

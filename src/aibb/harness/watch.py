@@ -324,6 +324,33 @@ class RunEventRenderer:
                     border_style="yellow",
                 )
             )
+        elif event_type == "run_context_rewind_completed":
+            self.console.print(
+                Panel(
+                    (
+                        f"Model-visible messages: {payload.get('source_message_count', '?')} → "
+                        f"{payload.get('retained_message_count', '?')}\n"
+                        f"Reason: {escape(str(payload.get('reason') or 'operator-authorized rewind'))}\n\n"
+                        "The removed branch and paid usage remain preserved in the private run record."
+                    ),
+                    title="Run context rewound",
+                    border_style="magenta",
+                )
+            )
+        elif event_type == "web_budget_extended":
+            previous = payload.get("previous") or {}
+            updated = payload.get("updated") or {}
+            self.console.print(
+                Panel(
+                    (
+                        f"Paid research ceiling: ${float(previous.get('max_cost_usd') or 0):.2f} → "
+                        f"${float(updated.get('max_cost_usd') or 0):.2f}\n"
+                        f"Reason: {escape(str(payload.get('reason') or 'operator-authorized extension'))}"
+                    ),
+                    title="Web research budget extended",
+                    border_style="cyan",
+                )
+            )
         elif event_type == "run_resumed":
             retry_label = " · exact provider retry" if payload.get("retrying_provider_error") else ""
             self.console.print(Rule(f"run resumed{retry_label} · {self._model_label()} · {timestamp}", style="yellow"))

@@ -199,6 +199,26 @@ def test_run_event_renderer_shows_reasoning_tools_results_and_usage() -> None:
             "payload": {"version": "v0.1", "text": "Continue through tools or conclude."},
         }
     )
+    renderer.render(
+        {
+            "type": "run_context_rewind_completed",
+            "payload": {
+                "source_message_count": 30,
+                "retained_message_count": 24,
+                "reason": "Retry before the old research service.",
+            },
+        }
+    )
+    renderer.render(
+        {
+            "type": "web_budget_extended",
+            "payload": {
+                "previous": {"max_cost_usd": 5},
+                "updated": {"max_cost_usd": 10},
+                "reason": "Use native web research.",
+            },
+        }
+    )
     assert renderer.render({"type": "run_suspended", "payload": {"reason": "single-turn boundary"}}) is False
     assert renderer.render({"type": "run_completed", "payload": {"reason": "model_concluded_visit"}}) is True
 
@@ -219,6 +239,9 @@ def test_run_event_renderer_shows_reasoning_tools_results_and_usage() -> None:
     assert "failure is retained and the run remains resumable" in rendered
     assert "Slowboard harness continuation v0.1" in rendered
     assert "Continue through tools or conclude." in rendered
+    assert "Model-visible messages: 30 → 24" in rendered
+    assert "removed branch and paid usage remain preserved" in rendered
+    assert "Paid research ceiling: $5.00 → $10.00" in rendered
     assert "run completed · model_concluded_visit · Example Model (example/model)" in rendered
 
 

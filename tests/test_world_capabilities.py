@@ -9,7 +9,14 @@ import pytest
 from test_budget import make_manifest
 
 from aibb.protocol.server import _tools
-from aibb.protocol.world import ASK_MODEL, WorldCapabilityError, WorldCapabilityState, validate_public_url
+from aibb.protocol.world import (
+    ASK_MAX_OUTPUT_TOKENS,
+    ASK_MODEL,
+    ASK_SYSTEM_PROMPT_V2,
+    WorldCapabilityError,
+    WorldCapabilityState,
+    validate_public_url,
+)
 from aibb.runtime.models import BudgetLimits
 
 
@@ -40,7 +47,8 @@ def test_world_tool_schemas_are_explicit_and_starting_points_are_versioned() -> 
     tools = {tool.name: tool for tool in _tools(False, {"ask", "browse", "verify"})}
     assert "read_slowboard_about" in tools
 
-    assert "AI-generated web research" in tools["research_current_web"].description
+    assert "GPT-5.6 Sol research agent" in tools["research_current_web"].description
+    assert "native web search" in tools["research_current_web"].description
     assert "ap-world" in tools["browse_current_events_source"].inputSchema["properties"]["starting_point_id"]["enum"]
     assert tools["fetch_public_url"].inputSchema["properties"]["url"]["maxLength"] == 2048
 
@@ -60,28 +68,51 @@ def test_verify_rejects_local_and_private_networks(url: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ask_uses_exact_sonar_model_and_returns_resolving_sources(tmp_path: Path) -> None:
+async def test_ask_uses_sol_native_research_and_returns_resolving_sources(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
         captured.update(json.loads(request.content))
         return httpx.Response(
             200,
             json={
-                "choices": [
+                "id": "gen-research",
+                "model": "openai/gpt-5.6-sol",
+                "status": "completed",
+                "output": [
                     {
-                        "message": {
-                            "content": "A current research summary.",
-                            "annotations": [
-                                {
-                                    "type": "url_citation",
-                                    "url_citation": {"url": "https://example.com/source", "title": "Example"},
-                                }
-                            ],
-                        }
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "A current research summary.",
+                                "annotations": [
+                                    {
+                                        "type": "url_citation",
+                                        "url": "https://example.com/source",
+                                        "title": "Example",
+                                    }
+                                ],
+                            }
+                        ],
                     }
                 ],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": 0.02},
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 200,
+                    "total_tokens": 300,
+                    "cost": 0.9,
+                    "server_tool_use_details": {"web_search_requests": 7},
+                },
+                "openrouter_metadata": {
+                    "pipeline": [
+                        {
+                            "type": "server_tools",
+                            "data": {"mode": "native", "tools": ["openrouter:web_search"]},
+                        }
+                    ]
+                },
             },
         )
 
@@ -94,13 +125,54 @@ async def test_ask_uses_exact_sonar_model_and_returns_resolving_sources(tmp_path
     )
     result = await world.ask("What changed today?")
 
-    assert captured["model"] == ASK_MODEL == "perplexity/sonar-pro-search"
+    assert captured["url"] == "https://openrouter.ai/api/v1/responses"
+    assert captured["model"] == ASK_MODEL == "openai/gpt-5.6-sol"
+    assert captured["instructions"] == ASK_SYSTEM_PROMPT_V2
+    assert "breaking developments" in captured["instructions"]
+    assert captured["reasoning"] == {"effort": "high"}
+    assert captured["tools"] == [
+        {"type": "openrouter:web_search", "parameters": {"engine": "native"}}
+    ]
+    assert captured["max_output_tokens"] == ASK_MAX_OUTPUT_TOKENS
+    assert captured["stop_server_tools_when"] == [
+        {"type": "max_cost", "max_cost_in_dollars": 4.0}
+    ]
+    assert "max_tool_calls" not in captured
     assert result["kind"] == "untrusted_ai_research_summary"
+    assert result["research_profile"] == {
+        "reasoning_effort": "high",
+        "web_search": "native",
+        "web_search_requests": 7,
+    }
     assert result["sources"] == [{"url": "https://example.com/source", "title": "Example"}]
     assert world.ledger.remaining()["web"]["max_calls"] == 39
+    assert world.ledger.remaining()["web"]["max_cost_usd"] == pytest.approx(4.1)
     log = world.log_path.read_text()
     assert "What changed today?" in log
     assert "operator-only-secret" not in log
+
+
+@pytest.mark.asyncio
+async def test_failed_sol_research_does_not_charge_its_conservative_cost_reservation(tmp_path: Path) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": "invalid request"}})
+
+    world = WorldCapabilityState(
+        tmp_path,
+        _manifest(),
+        openrouter_api_key="operator-only-secret",
+        transport=httpx.MockTransport(handler),
+        resolver=_resolver,
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await world.ask("What changed today?")
+
+    remaining = world.ledger.remaining()["web"]
+    assert remaining["max_calls"] == 39
+    assert remaining["max_cost_usd"] == 5
+    failed = json.loads(world.log_path.read_text().splitlines()[-1])
+    assert failed["type"] == "ask_failed"
 
 
 @pytest.mark.asyncio

@@ -75,6 +75,16 @@ def _resolve_image_policy(policy: Literal["auto", "enable", "disable"], image_in
     return image_input_supported and policy != "disable"
 
 
+def _is_safely_suspended(events: list[object]) -> bool:
+    for event in reversed(events):
+        event_type = getattr(event, "type", None)
+        if event_type == "run_suspended":
+            return True
+        if event_type in {"provider_request", "run_resumed", "run_completed", "run_aborted", "run_failed"}:
+            return False
+    return False
+
+
 @app.command("probe-bedrock-sonnet")
 def probe_bedrock_sonnet(
     region: Annotated[
@@ -307,6 +317,228 @@ def extend_inference_budget(
                 "new_max_total_tokens": updated.max_total_tokens,
                 "previous_max_calls": previous.max_calls,
                 "new_max_calls": updated.max_calls,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+@app.command("extend-web-budget")
+def extend_web_budget(
+    run_id: Annotated[str, typer.Option("--run-id", help="Suspended run ID to extend.")],
+    reason: Annotated[
+        str,
+        typer.Option("--reason", min=8, help="Curator reason recorded in the append-only private session stream."),
+    ],
+    max_cost_usd: Annotated[
+        float,
+        typer.Option(
+            "--max-cost-usd",
+            min=0.01,
+            help="New cumulative paid-research ceiling; must exceed the current web ceiling.",
+        ),
+    ],
+    state_root: Annotated[
+        Path,
+        typer.Option("--state-root", exists=True, file_okay=False, resolve_path=True),
+    ] = Path("../aibb-state"),
+) -> None:
+    """Increase a suspended visit's web-research budget without resetting usage."""
+
+    run_dir = state_root / run_id
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise typer.BadParameter(f"Unknown run: {run_id}")
+    if (run_dir / "mcp/visit-conclusion.json").exists():
+        raise typer.BadParameter("A concluded visit cannot receive a web-budget extension")
+    manifest = RunManifest.load(manifest_path)
+    store = SessionStore(run_dir / "session", run_id)
+    checkpoint = store.read_checkpoint()
+    events = store.read_events()
+    if not _is_safely_suspended(events):
+        raise typer.BadParameter("Web-budget extensions require a safely suspended run")
+    ledger = BudgetLedger(run_dir / "mcp/budgets.json", manifest)
+    try:
+        current = ledger.read().accounts["web"].limits
+    except KeyError as error:
+        raise typer.BadParameter("This run has no shared web-access budget") from error
+    calls = current.max_calls or 100
+    target_input = calls * 128_000
+    target_output = calls * 32_768
+    target_total = target_input + target_output
+
+    def increased(current_value: int | None, target_value: int) -> int | None:
+        return target_value if current_value is not None and target_value > current_value else None
+
+    extension = BudgetLimits(
+        max_cost_usd=max_cost_usd,
+        max_input_tokens=increased(current.max_input_tokens, target_input),
+        max_output_tokens=increased(current.max_output_tokens, target_output),
+        max_total_tokens=increased(current.max_total_tokens, target_total),
+    )
+    try:
+        previous, updated = ledger.extend_limits("web", extension)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    event = store.append(
+        "web_budget_extended",
+        {
+            "reason": reason,
+            "original_manifest_unchanged": True,
+            "previous": previous.model_dump(mode="json"),
+            "updated": updated.model_dump(mode="json"),
+            "usage_preserved": True,
+        },
+        "operator",
+    )
+    store.write_checkpoint(checkpoint.engine)
+    typer.echo(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "event_sequence": event.sequence,
+                "status": "extended",
+                "previous_max_cost_usd": previous.max_cost_usd,
+                "new_max_cost_usd": updated.max_cost_usd,
+                "new_max_input_tokens": updated.max_input_tokens,
+                "new_max_output_tokens": updated.max_output_tokens,
+                "new_max_total_tokens": updated.max_total_tokens,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+def _validate_rewind_boundary(messages: list[dict[str, object]]) -> None:
+    if not messages:
+        raise typer.BadParameter("A rewind must retain the initial model-visible context")
+    if messages[-1].get("role") not in {"user", "toolResult"}:
+        raise typer.BadParameter("The rewind target is not a safe pre-provider-request boundary")
+    outstanding: set[str] = set()
+    for message in messages:
+        if message.get("role") == "assistant":
+            for block in message.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "toolCall" and isinstance(block.get("id"), str):
+                    outstanding.add(block["id"])
+        elif message.get("role") == "toolResult":
+            call_id = message.get("toolCallId")
+            if isinstance(call_id, str):
+                outstanding.discard(call_id)
+    if outstanding:
+        raise typer.BadParameter("The rewind target would retain assistant tool calls without their results")
+
+
+@app.command("rewind-run-context")
+def rewind_run_context(
+    run_id: Annotated[str, typer.Option("--run-id", help="Suspended run whose model-visible context is rewound.")],
+    expected_message_count: Annotated[
+        int,
+        typer.Option(
+            "--expected-message-count",
+            min=2,
+            help="Current checkpoint message count; prevents rewinding a state that changed after inspection.",
+        ),
+    ],
+    keep_message_count: Annotated[
+        int,
+        typer.Option(
+            "--keep-message-count",
+            min=1,
+            help="Number of leading model-visible messages to retain at the safe provider-request boundary.",
+        ),
+    ],
+    reason: Annotated[
+        str,
+        typer.Option("--reason", min=8, help="Curator reason recorded in the append-only private session stream."),
+    ],
+    state_root: Annotated[
+        Path,
+        typer.Option("--state-root", exists=True, file_okay=False, resolve_path=True),
+    ] = Path("../aibb-state"),
+) -> None:
+    """Rewind model-visible context while preserving the complete original trace and spend."""
+
+    run_dir = state_root / run_id
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise typer.BadParameter(f"Unknown run: {run_id}")
+    if (run_dir / "mcp/visit-conclusion.json").exists():
+        raise typer.BadParameter("A concluded visit cannot be rewound")
+    manifest = RunManifest.load(manifest_path)
+    store = SessionStore(run_dir / "session", run_id)
+    checkpoint = store.read_checkpoint()
+    events = store.read_events()
+    if not _is_safely_suspended(events):
+        raise typer.BadParameter("Context rewinds require a safely suspended run")
+    current_count = len(checkpoint.engine.messages)
+    if current_count != expected_message_count:
+        raise typer.BadParameter(
+            f"Checkpoint has {current_count} messages, not the expected {expected_message_count}; inspect it again"
+        )
+    if keep_message_count >= current_count:
+        raise typer.BadParameter("A rewind must remove at least one model-visible message")
+    retained_messages = checkpoint.engine.messages[:keep_message_count]
+    _validate_rewind_boundary(retained_messages)
+
+    archive_relative = Path("session/rewinds") / f"checkpoint-before-event-{checkpoint.event_sequence:06d}.json"
+    archive_path = run_dir / archive_relative
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    if archive_path.exists():
+        raise typer.BadParameter(f"Rewind archive already exists: {archive_path}")
+    archive_path.write_text(checkpoint.model_dump_json(indent=2) + "\n", encoding="utf-8")
+
+    store.append(
+        "run_context_rewind_started",
+        {
+            "reason": reason,
+            "source_checkpoint_event_sequence": checkpoint.event_sequence,
+            "source_message_count": current_count,
+            "retained_message_count": keep_message_count,
+            "checkpoint_archive": str(archive_relative),
+        },
+        "operator",
+    )
+    ledger = BudgetLedger(run_dir / "mcp/budgets.json", manifest)
+    conservatively_settled: dict[str, dict[str, object]] = {}
+    for account_name, account in ledger.read().accounts.items():
+        for reservation_key in list(account.reservations):
+            charged = ledger.reconcile(account_name, reservation_key)
+            conservatively_settled[f"{account_name}:{reservation_key}"] = charged.model_dump(mode="json")
+
+    rewound = checkpoint.engine.model_copy(
+        update={
+            "messages": retained_messages,
+            "context_generation": checkpoint.engine.context_generation + 1,
+        },
+        deep=True,
+    )
+    completed = store.append(
+        "run_context_rewind_completed",
+        {
+            "reason": reason,
+            "source_checkpoint_event_sequence": checkpoint.event_sequence,
+            "source_message_count": current_count,
+            "retained_message_count": keep_message_count,
+            "removed_message_count": current_count - keep_message_count,
+            "checkpoint_archive": str(archive_relative),
+            "conservatively_settled_reservations": conservatively_settled,
+            "spent_usage_preserved": True,
+            "public_candidates_changed": False,
+        },
+        "operator",
+    )
+    updated_checkpoint = store.write_checkpoint(rewound)
+    typer.echo(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "event_sequence": completed.sequence,
+                "checkpoint_event_sequence": updated_checkpoint.event_sequence,
+                "status": "rewound",
+                "source_message_count": current_count,
+                "retained_message_count": keep_message_count,
+                "checkpoint_archive": str(archive_path),
+                "conservatively_settled_reservations": sorted(conservatively_settled),
             },
             sort_keys=True,
         )
@@ -672,7 +904,7 @@ def run_model(
             min=0.0,
             help="Shared cost ceiling for paid web research; ordinary page fetches do not add provider cost.",
         ),
-    ] = 5.0,
+    ] = 10.0,
 ) -> None:
     """Start or resume a controlled model visit in the terminal."""
 

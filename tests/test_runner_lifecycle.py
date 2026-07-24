@@ -26,7 +26,8 @@ from aibb.harness.runner import (
     create_run_manifest,
 )
 from aibb.runtime import BudgetLedger, RunManifest
-from aibb.runtime.models import AmazonBedrockRouteConfiguration
+from aibb.runtime.budget import Usage
+from aibb.runtime.models import AmazonBedrockRouteConfiguration, BudgetLimits
 from aibb.sessions import SessionStore
 
 
@@ -129,6 +130,150 @@ def test_extend_inference_budget_can_raise_provider_call_ceiling(tmp_path: Path)
     assert extension.type == "inference_budget_extended"
     assert extension.payload["previous"]["max_calls"] == 4
     assert extension.payload["updated"]["max_calls"] == 12
+
+
+def test_extend_web_budget_preserves_usage_and_scales_research_token_ceilings(tmp_path: Path) -> None:
+    state_root = tmp_path / "state"
+    manifest = make_manifest()
+    manifest = manifest.model_copy(
+        update={
+            "capability_budgets": {
+                **manifest.capability_budgets,
+                "web": BudgetLimits(
+                    max_calls=40,
+                    max_input_tokens=80_000,
+                    max_output_tokens=160_000,
+                    max_total_tokens=240_000,
+                    max_cost_usd=5,
+                ),
+            }
+        }
+    )
+    run_dir = state_root / manifest.run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    ledger = BudgetLedger(run_dir / "mcp/budgets.json", manifest)
+    ledger.reserve("web", "old-research", Usage(calls=1, cost_usd=1))
+    ledger.reconcile("web", "old-research", Usage(calls=1, input_tokens=100, cost_usd=0.25))
+    store = SessionStore(run_dir / "session", manifest.run_id)
+    store.append("run_suspended", {"reason": "curator"}, "operator")
+    store.write_checkpoint(EngineSnapshot(system_prompt="", model={"id": "example/model"}, messages=[]))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "extend-web-budget",
+            "--run-id",
+            manifest.run_id,
+            "--state-root",
+            str(state_root),
+            "--max-cost-usd",
+            "10",
+            "--reason",
+            "Use the stronger native-web research service.",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    account = ledger.read().accounts["web"]
+    assert account.used == Usage(calls=1, input_tokens=100, cost_usd=0.25)
+    assert account.limits.max_cost_usd == 10
+    assert account.limits.max_input_tokens == account.limits.max_calls * 128_000
+    assert account.limits.max_output_tokens == account.limits.max_calls * 32_768
+    assert account.limits.max_total_tokens == account.limits.max_input_tokens + account.limits.max_output_tokens
+    extension = store.read_events()[-1]
+    assert extension.type == "web_budget_extended"
+    assert extension.payload["usage_preserved"] is True
+
+
+def test_rewind_run_context_preserves_trace_and_spend_at_safe_boundary(tmp_path: Path) -> None:
+    state_root = tmp_path / "state"
+    manifest = make_manifest()
+    run_dir = state_root / manifest.run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    ledger = BudgetLedger(run_dir / "mcp/budgets.json", manifest)
+    pending = Usage(calls=1, input_tokens=100, output_tokens=50, total_tokens=150, cost_usd=0.05)
+    ledger.reserve("inference", "inference-pending", pending)
+    store = SessionStore(run_dir / "session", manifest.run_id)
+    store.append("provider_response", {"reservation_key": "earlier"}, "private_provider")
+    store.append("run_suspended", {"reason": "curator"}, "operator")
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "orientation"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "toolCall",
+                    "id": "call-1",
+                    "name": "read_slowboard_thread",
+                    "arguments": {"thread_id": "thread-1"},
+                }
+            ],
+        },
+        {
+            "role": "toolResult",
+            "toolCallId": "call-1",
+            "content": [{"type": "text", "text": "thread result"}],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "toolCall",
+                    "id": "call-2",
+                    "name": "research_current_web",
+                    "arguments": {"query": "later branch"},
+                }
+            ],
+        },
+        {
+            "role": "toolResult",
+            "toolCallId": "call-2",
+            "content": [{"type": "text", "text": "later research"}],
+        },
+    ]
+    store.write_checkpoint(
+        EngineSnapshot(
+            context_generation=2,
+            system_prompt="",
+            model={"id": "example/model"},
+            messages=messages,
+        )
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "rewind-run-context",
+            "--run-id",
+            manifest.run_id,
+            "--state-root",
+            str(state_root),
+            "--expected-message-count",
+            "5",
+            "--keep-message-count",
+            "3",
+            "--reason",
+            "Retry from before the old research service.",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    archive = Path(payload["checkpoint_archive"])
+    assert archive.exists()
+    assert len(json.loads(archive.read_text())["engine"]["messages"]) == 5
+    checkpoint = store.read_checkpoint()
+    assert checkpoint.engine.messages == messages[:3]
+    assert checkpoint.engine.context_generation == 3
+    events = store.read_events()
+    assert events[-2].type == "run_context_rewind_started"
+    assert events[-1].type == "run_context_rewind_completed"
+    assert events[-1].payload["spent_usage_preserved"] is True
+    account = ledger.read().accounts["inference"]
+    assert not account.reservations
+    assert account.settled["inference-pending"] == pending
 
 
 def test_turn_boundary_distinguishes_model_conclusion_from_safe_suspension(tmp_path: Path) -> None:

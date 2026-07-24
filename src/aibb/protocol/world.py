@@ -22,12 +22,20 @@ from pydantic import BaseModel, ConfigDict
 from aibb.runtime import BudgetLedger, RunManifest
 from aibb.runtime.budget import Usage
 
-ASK_MODEL = "perplexity/sonar-pro-search"
-ASK_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+ASK_MODEL = "openai/gpt-5.6-sol"
+ASK_ENDPOINT = "https://openrouter.ai/api/v1/responses"
 SHARED_WEB_BUDGET = "web"
-ASK_SYSTEM_PROMPT_V1 = (
-    "Answer the research question directly. Distinguish established information from uncertainty. "
-    "Use current web research and provide source citations."
+ASK_MAX_OUTPUT_TOKENS = 32_768
+ASK_REQUEST_COST_CEILING_USD = 4.0
+ASK_SYSTEM_PROMPT_V2 = (
+    "You are a web research service supporting another model's investigation. Use native web search actively and "
+    "open relevant pages when useful. Answer the question directly and scale the investigation to its complexity. "
+    "Prefer primary and authoritative sources; use secondary sources only to orient. Verify dates, definitions, "
+    "measurements, and important limitations. When the topic is plausibly changing, search explicitly for recent "
+    "announcements and breaking developments, then corroborate them with primary or independent authoritative "
+    "sources; label anything too new to verify as provisional. Cite every material empirical claim inline. "
+    "Distinguish established results, developer claims, uncertainty, and your own inference. Return a concise but "
+    "substantive research memo."
 )
 STARTING_POINTS_VERSION = "v0.1"
 MAX_FETCH_BYTES = 100_000
@@ -223,7 +231,7 @@ class WorldCapabilityState:
             os.fsync(stream.fileno())
 
     def _per_call_limit(self, capability: str, field: str, default: int | float) -> int | float:
-        limits = self.manifest.capability_budgets[self._budget_account(capability)]
+        limits = self.ledger.read().accounts[self._budget_account(capability)].limits
         total = getattr(limits, field)
         calls = limits.max_calls or 1
         return default if total is None else total / calls
@@ -258,28 +266,46 @@ class WorldCapabilityState:
             raise WorldCapabilityError(
                 "research_current_web is unavailable because its operator credential is not configured"
             )
+        remaining_cost = self.ledger.remaining()[self._budget_account("ask")]["max_cost_usd"]
+        request_cost_ceiling = (
+            ASK_REQUEST_COST_CEILING_USD
+            if remaining_cost is None
+            else min(ASK_REQUEST_COST_CEILING_USD, float(remaining_cost))
+        )
+        if request_cost_ceiling <= 0:
+            raise WorldCapabilityError("research_current_web has no remaining paid-research budget")
         payload = {
             "model": ASK_MODEL,
-            "messages": [
-                {"role": "system", "content": ASK_SYSTEM_PROMPT_V1},
-                {"role": "user", "content": query},
+            "instructions": ASK_SYSTEM_PROMPT_V2,
+            "input": query,
+            "reasoning": {"effort": "high"},
+            "tools": [{"type": "openrouter:web_search", "parameters": {"engine": "native"}}],
+            "tool_choice": "auto",
+            "max_output_tokens": ASK_MAX_OUTPUT_TOKENS,
+            "stop_server_tools_when": [
+                {"type": "max_cost", "max_cost_in_dollars": request_cost_ceiling}
             ],
-            "max_tokens": 4_000,
-            "stream": False,
+            "service_tier": "default",
+            "store": False,
         }
         request_bytes = len(_canonical_json(payload).encode("utf-8"))
-        reserved_cost = float(self._per_call_limit("ask", "max_cost_usd", 1.0))
-        key, requested = self._reserve("ask", request_bytes=request_bytes, output_tokens=4_000, cost_usd=reserved_cost)
+        key, requested = self._reserve(
+            "ask",
+            request_bytes=request_bytes,
+            output_tokens=ASK_MAX_OUTPUT_TOKENS,
+            cost_usd=request_cost_ceiling,
+        )
         self._append_log({"type": "ask_requested", "reservation_key": key, "query": query, "model": ASK_MODEL})
         try:
             headers = {
                 "Authorization": f"Bearer {self.openrouter_api_key}",
                 "Content-Type": "application/json",
                 "X-Title": f"{self.manifest.archive_title or 'Archive'} world research capability",
+                "X-OpenRouter-Metadata": "enabled",
             }
             if self.manifest.archive_base_url:
                 headers["HTTP-Referer"] = self.manifest.archive_base_url
-            async with httpx.AsyncClient(timeout=180, transport=self.transport) as client:
+            async with httpx.AsyncClient(timeout=1_200, transport=self.transport) as client:
                 response = await client.post(
                     ASK_ENDPOINT,
                     headers=headers,
@@ -287,38 +313,57 @@ class WorldCapabilityState:
                 )
             response.raise_for_status()
             raw = response.json()
-            message = raw["choices"][0]["message"]
-            annotations = message.get("annotations") or []
+            output_texts: list[str] = []
+            annotations: list[dict[str, Any]] = []
+            for item in raw.get("output") or []:
+                if not isinstance(item, dict) or item.get("type") != "message":
+                    continue
+                for block in item.get("content") or []:
+                    if not isinstance(block, dict) or block.get("type") != "output_text":
+                        continue
+                    if isinstance(block.get("text"), str):
+                        output_texts.append(block["text"])
+                    annotations.extend(
+                        annotation
+                        for annotation in (block.get("annotations") or [])
+                        if isinstance(annotation, dict)
+                    )
+            summary = "\n\n".join(output_texts).strip()
+            if not summary:
+                raise WorldCapabilityError("research provider returned no research memo")
             sources: list[dict[str, str]] = []
             seen: set[str] = set()
             for annotation in annotations:
-                citation = annotation.get("url_citation") if isinstance(annotation, dict) else None
-                if not isinstance(citation, dict) or not isinstance(citation.get("url"), str):
+                citation = annotation.get("url_citation")
+                citation = citation if isinstance(citation, dict) else annotation
+                if annotation.get("type") != "url_citation" or not isinstance(citation.get("url"), str):
                     continue
                 url = citation["url"]
                 if url not in seen:
                     sources.append({"url": url, "title": str(citation.get("title") or url)})
                     seen.add(url)
-            for citation in [*(message.get("citations") or []), *(raw.get("citations") or [])]:
-                if isinstance(citation, str):
-                    url = citation
-                else:
-                    url = citation.get("url") if isinstance(citation, dict) else None
-                if isinstance(url, str) and url not in seen:
-                    sources.append({"url": url, "title": url})
-                    seen.add(url)
             if not sources:
                 raise WorldCapabilityError("research provider returned no resolving source URLs")
             usage = raw.get("usage") or {}
-            input_tokens = int(usage.get("prompt_tokens") or 0)
-            output_tokens = int(usage.get("completion_tokens") or 0)
+            input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+            output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
             total_tokens = int(usage.get("total_tokens") or input_tokens + output_tokens)
             actual_cost = float(usage.get("cost") or 0)
+            search_requests = int(
+                (usage.get("server_tool_use_details") or {}).get("web_search_requests")
+                or (usage.get("server_tool_use") or {}).get("web_search_requests")
+                or 0
+            )
             result = {
                 "kind": "untrusted_ai_research_summary",
                 "model": ASK_MODEL,
+                "research_profile": {
+                    "reasoning_effort": "high",
+                    "web_search": "native",
+                    "web_search_requests": search_requests,
+                },
                 "query": query,
-                "summary": str(message.get("content") or ""),
+                "summary": summary,
                 "sources": sources,
             }
             result_bytes = len(_canonical_json(result).encode("utf-8"))
@@ -340,8 +385,10 @@ class WorldCapabilityState:
                     "type": "ask_completed",
                     "reservation_key": key,
                     "response_sha256": hashlib.sha256(response.content).hexdigest(),
+                    "response_id": raw.get("id"),
                     "sources": sources,
                     "usage": usage,
+                    "route": raw.get("openrouter_metadata"),
                 }
             )
             return result
@@ -349,7 +396,11 @@ class WorldCapabilityState:
             budget_account = self._budget_account("ask")
             account = self.ledger.read().accounts[budget_account]
             if key in account.reservations:
-                self.ledger.reconcile(budget_account, key, requested)
+                self.ledger.reconcile(
+                    budget_account,
+                    key,
+                    Usage(calls=1, request_bytes=requested.request_bytes),
+                )
             self._append_log(
                 {"type": "ask_failed", "reservation_key": key, "error": type(error).__name__, "message": str(error)}
             )
