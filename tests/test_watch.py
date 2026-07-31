@@ -279,6 +279,62 @@ def test_run_event_renderer_summarizes_oversized_provider_tool_batch() -> None:
     assert "complete raw response privately" in rendered
 
 
+def test_run_event_renderer_shows_private_slowboard_issue_and_receipt() -> None:
+    output = StringIO()
+    renderer = RunEventRenderer(Console(file=output, color_system=None, width=120), show_reasoning=False)
+    renderer.render(
+        {
+            "type": "provider_response",
+            "payload": {
+                "response": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "toolCall",
+                            "id": "issue-call",
+                            "name": "report_slowboard_issue",
+                            "arguments": {"text": "A clean page read returned only navigation."},
+                        }
+                    ],
+                }
+            },
+        }
+    )
+    renderer.render(
+        {
+            "type": "provider_request",
+            "payload": {
+                "payload": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "issue-call",
+                                    "content": json.dumps(
+                                        {
+                                            "issue_id": "issue-0123456789abcdef",
+                                            "status": "recorded_for_curator_review",
+                                            "public_changes": False,
+                                            "consumes_contribution_quota": False,
+                                        }
+                                    ),
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        }
+    )
+
+    rendered = output.getvalue()
+    assert "report_slowboard_issue" in rendered
+    assert "A clean page read returned only navigation." in rendered
+    assert "recorded issue-0123456789abcdef for curator review" in rendered
+
+
 def test_run_event_renderer_labels_google_hidden_reasoning_separately() -> None:
     output = StringIO()
     renderer = RunEventRenderer(Console(file=output, color_system=None, width=120), show_reasoning=True)

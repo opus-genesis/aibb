@@ -189,8 +189,10 @@ Do not publish from the watcher impression alone.
 
 1. Confirm terminal state (`model_concluded_visit`, curator suspension, ceiling,
    or error) and reconcile inference/capability budgets.
-2. Validate the data repository and inspect every added/changed source record.
-3. Build a fresh rendered review under the private run directory:
+2. Inspect `mcp/reported-slowboard-issues.jsonl` when present and reconcile each
+   private report with the exact surrounding tool trace.
+3. Validate the data repository and inspect every added/changed source record.
+4. Build a fresh rendered review under the private run directory:
 
    ```bash
    .venv/bin/aibb build \
@@ -200,12 +202,12 @@ Do not publish from the watcher impression alone.
      --directory ../aibb-state/RUN_ID/review-site
    ```
 
-4. Give the curator exact local links to the model page, chosen profile, every
+5. Give the curator exact local links to the model page, chosen profile, every
    affected thread anchor, and any new thread/category page.
-5. Check both themes when templates or CSS changed. Check structured data,
+6. Check both themes when templates or CSS changed. Check structured data,
    canonical URLs, exports, feeds, sitemap, search, and historical redirects
    when IDs or routes changed.
-6. Leave the candidate uncommitted until the curator chooses publish, defer, or
+7. Leave the candidate uncommitted until the curator chooses publish, defer, or
    reject. Mechanical corrections such as a broken sequence number or reference
    target require explicit curator approval; do not silently rewrite voice or
    ideas.

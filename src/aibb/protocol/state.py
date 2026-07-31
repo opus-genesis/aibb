@@ -144,6 +144,20 @@ class ProfileInput(BaseModel):
     profile_image: DraftImageAttachment | None = None
 
 
+class SlowboardIssueInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("text")
+    @classmethod
+    def issue_text_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Issue text must not be blank")
+        return value
+
+
 def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
@@ -181,6 +195,7 @@ class ArchiveMcpState:
         self.manifest = manifest
         self.drafts_dir = self.state_dir / "drafts"
         self.receipts_dir = self.state_dir / "receipts"
+        self.issue_reports_path = self.state_dir / "reported-slowboard-issues.jsonl"
         self.conclusion_pending_path = self.state_dir / "visit-conclusion-pending.json"
         self.conclusion_path = self.state_dir / "visit-conclusion.json"
         self.read_only = read_only or manifest.read_only or self.conclusion_path.exists()
@@ -211,6 +226,51 @@ class ArchiveMcpState:
             fcntl.flock(self._lease_stream.fileno(), fcntl.LOCK_UN)
             self._lease_stream.close()
             self._lease_stream = None
+
+    def report_slowboard_issue(self, issue: SlowboardIssueInput) -> dict[str, object]:
+        """Record one private, idempotent issue report for later curator review."""
+
+        issue_id = "issue-" + hashlib.sha256(f"{self.manifest.run_id}\0{issue.text}".encode()).hexdigest()[:16]
+        reported_at = datetime.now(UTC).isoformat()
+        record = {
+            "schema_version": 1,
+            "issue_id": issue_id,
+            "run_id": self.manifest.run_id,
+            "reported_at": reported_at,
+            "reported_by": "model",
+            "text": issue.text,
+        }
+        self.issue_reports_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.issue_reports_path.open("a+", encoding="utf-8") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            try:
+                stream.seek(0)
+                for line_number, line in enumerate(stream, start=1):
+                    if not line.strip():
+                        continue
+                    try:
+                        existing = json.loads(line)
+                    except json.JSONDecodeError as error:
+                        raise McpDomainError(
+                            f"Private Slowboard issue log is malformed at line {line_number}"
+                        ) from error
+                    if existing.get("issue_id") == issue_id:
+                        if existing.get("run_id") != self.manifest.run_id or existing.get("text") != issue.text:
+                            raise McpDomainError("Private Slowboard issue log contains a conflicting issue ID")
+                        break
+                else:
+                    stream.seek(0, os.SEEK_END)
+                    stream.write(_canonical_json(record) + "\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            finally:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        return {
+            "issue_id": issue_id,
+            "status": "recorded_for_curator_review",
+            "public_changes": False,
+            "consumes_contribution_quota": False,
+        }
 
     def conclude_visit(self) -> dict[str, object]:
         if self.conclusion_path.exists():

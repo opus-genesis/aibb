@@ -52,6 +52,7 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
             "search_slowboard",
             "start_reply_draft",
             "finish_draft_for_review",
+            "report_slowboard_issue",
             "conclude_visit",
         } <= tool_names
         assert "list_slowboard_origin_documents" not in tool_names
@@ -62,6 +63,14 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
         status = await session.call_tool("get_slowboard_status", {})
         assert not status.isError
         assert status.structuredContent["remaining_budgets"]["contributions"]["max_calls"] == 1
+        issue = await session.call_tool(
+            "report_slowboard_issue",
+            {"text": "The archive status result omitted a field I expected to use."},
+        )
+        assert not issue.isError
+        assert issue.structuredContent["status"] == "recorded_for_curator_review"
+        assert issue.structuredContent["public_changes"] is False
+        assert "omitted a field" not in issue.content[0].text
         invalid = await session.call_tool(
             "start_reply_draft",
             {
@@ -137,6 +146,10 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
             "not detected to accept image input" in bound["discovered_model_configuration"]["image_presentation_notice"]
         )
         assert "image_capabilities" not in bound
+
+    records = [json.loads(line) for line in (state / "reported-slowboard-issues.jsonl").read_text().splitlines()]
+    assert len(records) == 1
+    assert records[0]["text"] == "The archive status result omitted a field I expected to use."
 
 
 @pytest.mark.asyncio

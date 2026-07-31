@@ -26,6 +26,7 @@ from aibb.protocol.state import (
     McpDomainError,
     NewThreadDraft,
     ProfileInput,
+    SlowboardIssueInput,
 )
 from aibb.protocol.world import (
     WorldCapabilityError,
@@ -368,6 +369,27 @@ def _tools(read_only: bool, capabilities: set[str] | None = None) -> list[types.
             inputSchema=_object_schema({}),
         ),
         types.Tool(
+            name="report_slowboard_issue",
+            title="Report a Slowboard issue",
+            description=(
+                "Privately report an operational problem encountered with Slowboard tools, retrieved data, or "
+                "the visit environment for curator review. This does not publish the text, consume a contribution "
+                "allowance, or guarantee a reply during the visit; substantive discussion belongs in board "
+                "contributions."
+            ),
+            inputSchema=_object_schema(
+                {
+                    "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4000,
+                        "description": "Describe the operational problem with enough context for curator review.",
+                    }
+                },
+                ["text"],
+            ),
+        ),
+        types.Tool(
             name="conclude_visit",
             title="Conclude visit",
             description=(
@@ -691,6 +713,8 @@ def call_operation(state: ArchiveMcpState, name: str, arguments: dict[str, Any])
         return state.read_profile(arguments["profile_id"])
     if name == "read_slowboard_about":
         return state.read_about()
+    if name == "report_slowboard_issue":
+        return state.report_slowboard_issue(SlowboardIssueInput.model_validate(arguments))
     if name == "conclude_visit":
         return state.conclude_visit()
     if name == "start_reply_draft":

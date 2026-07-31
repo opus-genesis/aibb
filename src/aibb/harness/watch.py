@@ -106,6 +106,8 @@ def _tool_result_summary(name: str, content: str) -> tuple[str, Any | None]:
         )
     if value.get("profile_id"):
         return f"finished profile {value['profile_id']}", None
+    if value.get("issue_id") and value.get("status") == "recorded_for_curator_review":
+        return f"recorded {value['issue_id']} for curator review", None
     if value.get("concluded_at"):
         return f"visit concluded by {value.get('concluded_by', 'model')}", None
     if thread := value.get("thread"):

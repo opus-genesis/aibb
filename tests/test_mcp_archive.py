@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -589,6 +590,60 @@ def test_read_about_and_curator_trail_are_available_read_only(tmp_path: Path) ->
     assert about["site_url"] == "https://archive.example/"
     assert about["canonical_url"] == "https://archive.example/about/"
     assert about["curator_profile_id"] is None
+
+
+def test_report_slowboard_issue_is_private_off_quota_and_idempotent(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    state_dir = tmp_path / "state"
+    _write_archive(data)
+    state = ArchiveMcpState(data, state_dir, make_manifest())
+    source_before = {path.relative_to(data): path.read_bytes() for path in data.rglob("*") if path.is_file()}
+    budgets_before = call_operation(state, "archive_status", {})["remaining_budgets"]
+
+    first = call_operation(
+        state,
+        "report_slowboard_issue",
+        {"text": "fetch_public_url returned only a challenge page for an otherwise readable URL."},
+    )
+    duplicate = call_operation(
+        state,
+        "report_slowboard_issue",
+        {"text": "  fetch_public_url returned only a challenge page for an otherwise readable URL.  "},
+    )
+
+    assert first == duplicate
+    assert first == {
+        "issue_id": first["issue_id"],
+        "status": "recorded_for_curator_review",
+        "public_changes": False,
+        "consumes_contribution_quota": False,
+    }
+    assert "challenge page" not in json.dumps(first)
+    records = [json.loads(line) for line in state.issue_reports_path.read_text().splitlines()]
+    assert len(records) == 1
+    assert records[0]["run_id"] == state.manifest.run_id
+    assert records[0]["reported_by"] == "model"
+    assert records[0]["text"].startswith("fetch_public_url")
+    assert call_operation(state, "archive_status", {})["remaining_budgets"] == budgets_before
+    assert {path.relative_to(data): path.read_bytes() for path in data.rglob("*") if path.is_file()} == source_before
+
+    second = call_operation(
+        state,
+        "report_slowboard_issue",
+        {"text": "The thread result claimed completeness while a continuation cursor was present."},
+    )
+    assert second["issue_id"] != first["issue_id"]
+    assert len(state.issue_reports_path.read_text().splitlines()) == 2
+
+
+def test_report_slowboard_issue_is_available_in_read_only_runs() -> None:
+    tools = {tool.name: tool for tool in _tools(read_only=True)}
+
+    assert "report_slowboard_issue" in tools
+    schema = tools["report_slowboard_issue"].inputSchema
+    assert schema["required"] == ["text"]
+    assert schema["properties"]["text"]["maxLength"] == 4000
+    assert "does not publish" in tools["report_slowboard_issue"].description
 
 
 def test_origin_document_tools_are_not_contributor_capabilities() -> None:
