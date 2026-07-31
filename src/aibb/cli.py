@@ -38,6 +38,12 @@ from aibb.harness.google_agent_platform import (
     google_agent_platform_endpoint,
 )
 from aibb.harness.runner import create_run_manifest, run_model_visit
+from aibb.harness.tinker import (
+    TINKER_ANTHROPIC_ENDPOINT,
+    probe_tinker_model,
+    public_tinker_model_id,
+    tinker_model,
+)
 from aibb.harness.watch import latest_run_directory, watch_event_stream, watch_state_root
 from aibb.publish import check_publication, deploy_publication, prepare_publication
 from aibb.runtime import BudgetLedger, RunManifest
@@ -744,7 +750,7 @@ def run_model(
         ),
     ] = Path("../aibb-state"),
     provider: Annotated[
-        Literal["openrouter", "anthropic", "amazon-bedrock", "google_agent_platform"],
+        Literal["openrouter", "anthropic", "amazon-bedrock", "google_agent_platform", "tinker"],
         typer.Option("--provider", help="Inference provider; bound immutably into a new run."),
     ] = "openrouter",
     bedrock_region: Annotated[
@@ -929,7 +935,13 @@ def run_model(
         if resumed.archive_base_url != site.base_url:
             raise typer.BadParameter("The resumed run belongs to a different publication lane")
         selected_provider = resumed.identity.provider
-        if selected_provider not in {"openrouter", "anthropic", "amazon-bedrock", "google_agent_platform"}:
+        if selected_provider not in {
+            "openrouter",
+            "anthropic",
+            "amazon-bedrock",
+            "google_agent_platform",
+            "tinker",
+        }:
             raise typer.BadParameter(f"Unsupported provider in resumed run: {selected_provider}")
         run_id = resume_run
     else:
@@ -949,6 +961,7 @@ def run_model(
         key_name = {
             "anthropic": "ANTHROPIC_API_KEY",
             "google_agent_platform": "GOOGLE_API_KEY",
+            "tinker": "TINKER_API_KEY",
         }.get(selected_provider, "OPENROUTER_API_KEY")
         api_key = os.environ.get(key_name)
         if not api_key:
@@ -1039,6 +1052,46 @@ def run_model(
             openrouter_routing_configuration = None
             amazon_bedrock_routing_configuration = None
             endpoint = ANTHROPIC_ENDPOINT
+        elif selected_provider == "tinker":
+            try:
+                catalog_model = tinker_model(model)
+            except ValueError as error:
+                raise typer.BadParameter(str(error)) from error
+            try:
+                asyncio.run(probe_tinker_model(model, api_key=api_key))
+            except Exception as error:  # noqa: BLE001
+                raise typer.BadParameter(f"Tinker route probe failed for {model}: {error}") from error
+            catalog_context_window = catalog_model.contextWindow
+            catalog_max_completion = catalog_model.maxTokens
+            catalog_input_modalities = list(catalog_model.input)
+            catalog_image_input = "image" in catalog_model.input
+            prompt_price = catalog_model.cost.input / 1_000_000
+            completion_price = catalog_model.cost.output / 1_000_000
+            developer = developer_name or "Thinking Machines Lab"
+            effective_output_tokens = min(max_output_tokens, catalog_model.maxTokens)
+            average_input_tokens = min(60_000, max(8_000, catalog_context_window // 8))
+            average_output_tokens = min(4_000, effective_output_tokens)
+            estimated_cost = max_provider_turns * (
+                average_input_tokens * prompt_price + average_output_tokens * completion_price
+            )
+            effective_cost_usd = max_cost_usd or round(max(1.0, estimated_cost * 1.5), 2)
+            if reasoning_mode == "mandatory":
+                raise typer.BadParameter(
+                    f"{model} supports controllable Tinker reasoning; it is not a mandatory-reasoning route"
+                )
+            reasoning_enabled = reasoning_mode != "disabled"
+            reasoning_configuration = ReasoningConfiguration(
+                enabled=reasoning_enabled,
+                supported_efforts=["low", "medium", "high", "xhigh", "max"],
+                selected_effort="high" if reasoning_enabled else None,
+                request_parameter=(
+                    {"output_config": {"effort": "high"}} if reasoning_enabled else {"thinking": {"type": "disabled"}}
+                ),
+                source="tinker-catalog" if reasoning_mode == "auto" else "curator-override",
+            )
+            openrouter_routing_configuration = None
+            amazon_bedrock_routing_configuration = None
+            endpoint = TINKER_ANTHROPIC_ENDPOINT
         elif selected_provider == "amazon-bedrock":
             selected_region = bedrock_region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
             if not selected_region:
@@ -1176,6 +1229,8 @@ def run_model(
                 if selected_provider == "openrouter"
                 else legacy_sonnet_base_id(model)
                 if selected_provider == "amazon-bedrock"
+                else public_tinker_model_id(model)
+                if selected_provider == "tinker"
                 else None
             ),
         )

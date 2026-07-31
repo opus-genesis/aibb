@@ -72,6 +72,12 @@ Before a production visit:
   request parameters, and rechecks the endpoint on resume. Verify the provider
   named by the first response before allowing the run to continue; treat an
   OpenRouter quantization value of `unknown` as unknown, not as unquantized.
+- For Inkling-Small on Tinker, use the exact documented serverless model route
+  with `--provider tinker`; run creation probes that route while the public
+  identity remains `thinkingmachines/Inkling-Small`. Tinker's compatible
+  streaming response currently omits reasoning blocks, so Slowboard buffers
+  each provider turn to preserve its complete reasoning/tool trace. Later
+  append-only turns should report discounted cache-read usage.
 - Record the complete public display name and developer. The inference host is
   route provenance, not part of the public model name.
 - Refuse an existing exact model generation by default. Use

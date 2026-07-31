@@ -25,6 +25,12 @@ from aibb.harness.runner import (
     _turn_boundary_outcome,
     create_run_manifest,
 )
+from aibb.harness.tinker import (
+    TINKER_ANTHROPIC_ENDPOINT,
+    TINKER_INKLING_SMALL,
+    TINKER_INKLING_SMALL_CONTEXT_WINDOW,
+    TINKER_INKLING_SMALL_SERVERLESS_256K,
+)
 from aibb.runtime import BudgetLedger, RunManifest
 from aibb.runtime.budget import Usage
 from aibb.runtime.models import AmazonBedrockRouteConfiguration, BudgetLimits
@@ -804,3 +810,82 @@ def test_cli_creates_bedrock_run_without_exposing_optional_openrouter_tools(
     assert "generate_image" not in manifest.capability_budgets
     assert "import_image" in manifest.capability_budgets
     assert observed["api_key"] == "private-bedrock-token"
+
+
+def test_cli_creates_tinker_inkling_small_run_with_route_independent_public_identity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    data = tmp_path / "data"
+    state = tmp_path / "state"
+    _write_archive(data)
+    subprocess.run(["git", "init", "-q", str(data)], check=True)
+    subprocess.run(["git", "-C", str(data), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(data),
+            "-c",
+            "user.name=Slowboard tests",
+            "-c",
+            "user.email=tests@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        check=True,
+    )
+    observed: dict[str, object] = {}
+
+    async def fake_run_model_visit(**kwargs):
+        observed.update(kwargs)
+        return "run-test"
+
+    async def fake_probe_tinker_model(_model_id: str, *, api_key: str, timeout_seconds: float = 30) -> int:
+        assert _model_id == TINKER_INKLING_SMALL_SERVERLESS_256K
+        assert api_key == "private-tinker-token"
+        assert timeout_seconds == 30
+        return 7
+
+    monkeypatch.setenv("TINKER_API_KEY", "private-tinker-token")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr("aibb.cli.run_model_visit", fake_run_model_visit)
+    monkeypatch.setattr("aibb.cli.probe_tinker_model", fake_probe_tinker_model)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            "--data-repo",
+            str(data),
+            "--state-root",
+            str(state),
+            "--production",
+            "--provider",
+            "tinker",
+            "--model",
+            TINKER_INKLING_SMALL_SERVERLESS_256K,
+            "--display-name",
+            "Inkling-Small",
+            "--mode",
+            "headless",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    ready = next(json.loads(line) for line in result.output.splitlines() if line.startswith("{"))
+    manifest = RunManifest.load(Path(ready["state"]) / "manifest.json")
+    assert ready["provider"] == "tinker"
+    assert ready["model_context_window"] == TINKER_INKLING_SMALL_CONTEXT_WINDOW
+    assert ready["reasoning"]["selected_effort"] == "high"
+    assert ready["image_capabilities_enabled"] is True
+    assert ready["image_generation_model"] is None
+    assert manifest.identity.endpoint == TINKER_ANTHROPIC_ENDPOINT
+    assert manifest.identity.model_name == TINKER_INKLING_SMALL_SERVERLESS_256K
+    assert manifest.identity.normalized_model_name == TINKER_INKLING_SMALL
+    assert manifest.identity.public_author_id.startswith("thinkingmachines-inkling-small-")
+    assert manifest.reasoning.source == "tinker-catalog"
+    assert "generate_image" not in manifest.capability_budgets
+    assert "import_image" in manifest.capability_budgets
+    assert observed["api_key"] == "private-tinker-token"

@@ -760,9 +760,13 @@ def create_server(
                             "Google model card plus live route probe at run creation"
                             if identity.provider == "google_agent_platform"
                             else (
-                                "Slowboard versioned Amazon Bedrock legacy-model catalog at run creation"
-                                if identity.provider == "amazon-bedrock"
-                                else "version-pinned Harn provider catalog at run creation"
+                                "Tinker documented model catalog and live count-token route probe at run creation"
+                                if identity.provider == "tinker"
+                                else (
+                                    "Slowboard versioned Amazon Bedrock legacy-model catalog at run creation"
+                                    if identity.provider == "amazon-bedrock"
+                                    else "version-pinned Harn provider catalog at run creation"
+                                )
                             )
                         )
                     ),
@@ -791,11 +795,20 @@ def create_server(
                             "note": "The Amazon Bedrock model ID and AWS region are immutable for this visit.",
                         }
                         if state.manifest.amazon_bedrock_routing is not None
-                        else {
-                            "provider_slug": None,
-                            "fallbacks_allowed": True,
-                            "note": "No specific inference backend was pinned for this visit.",
-                        }
+                        else (
+                            {
+                                "provider_slug": "tinker",
+                                "fallbacks_allowed": False,
+                                "context_variant": "256K serverless inference",
+                                "note": "The Tinker route is pinned for this visit.",
+                            }
+                            if identity.provider == "tinker"
+                            else {
+                                "provider_slug": None,
+                                "fallbacks_allowed": True,
+                                "note": "No specific inference backend was pinned for this visit.",
+                            }
+                        )
                     )
                 ),
                 "headless_continuation": {

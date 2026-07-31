@@ -54,6 +54,7 @@ class ReasoningConfiguration(BaseModel):
     source: Literal[
         "openrouter-catalog",
         "bedrock-catalog",
+        "tinker-catalog",
         "provider-default",
         "curator-override",
         "unavailable",

@@ -28,6 +28,7 @@ from aibb.harness.context import build_context_envelope
 from aibb.harness.engine import AibbHarnessEngine, EngineSnapshot
 from aibb.harness.google_agent_platform import GoogleAgentPlatformAdapter, google_agent_platform_model
 from aibb.harness.openrouter import OpenRouterAdapter, openrouter_model
+from aibb.harness.tinker import TinkerAdapter, tinker_model
 from aibb.protocol.client import StdioMcpBridge
 from aibb.runtime import BudgetLedger, RunManifest
 from aibb.runtime.headless import HEADLESS_CONTINUATION_MESSAGES
@@ -176,7 +177,7 @@ def create_run_manifest(
     max_image_cost_usd: float = 2.0,
     max_web_calls: int = 40,
     max_web_cost_usd: float = 10.0,
-    provider: Literal["openrouter", "anthropic", "amazon-bedrock", "google_agent_platform"] = "openrouter",
+    provider: Literal["openrouter", "anthropic", "amazon-bedrock", "google_agent_platform", "tinker"] = "openrouter",
     endpoint: str | None = None,
     system_prompt_text: str | None = None,
     system_prompt_label: str | None = None,
@@ -559,6 +560,22 @@ async def run_model_visit(
             session=store,
             max_output_tokens=max_output_tokens,
             tool_choice=manifest.tool_choice,
+        )
+        catalog_record = model.model_dump(mode="json", by_alias=True, exclude_none=True)
+    elif manifest.identity.provider == "tinker":
+        if not api_key:
+            raise ValueError("TINKER_API_KEY is not set")
+        model = tinker_model(manifest.identity.model_name)
+        context_window = min(manifest.model_context_window or model.contextWindow, model.contextWindow)
+        max_output_tokens = min(manifest.max_output_tokens_per_turn, model.maxTokens, context_window)
+        model = model.model_copy(update={"contextWindow": context_window, "maxTokens": max_output_tokens})
+        adapter = TinkerAdapter(
+            api_key=api_key,
+            ledger=ledger,
+            session=store,
+            max_output_tokens=max_output_tokens,
+            tool_choice=manifest.tool_choice,
+            reasoning_effort=manifest.reasoning.selected_effort if manifest.reasoning.enabled else None,
         )
         catalog_record = model.model_dump(mode="json", by_alias=True, exclude_none=True)
     elif manifest.identity.provider == "amazon-bedrock":

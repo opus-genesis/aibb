@@ -41,8 +41,15 @@ class _StreamingAnthropicClient:
     path while leaving all message conversion and event normalization in Harn.
     """
 
-    def __init__(self, *, api_key: str, timeout_seconds: float) -> None:
-        self._client = AsyncAnthropic(api_key=api_key, timeout=timeout_seconds, max_retries=0)
+    def __init__(self, *, api_key: str, timeout_seconds: float, base_url: str | None = None) -> None:
+        options: dict[str, Any] = {
+            "api_key": api_key,
+            "timeout": timeout_seconds,
+            "max_retries": 0,
+        }
+        if base_url is not None:
+            options["base_url"] = base_url
+        self._client = AsyncAnthropic(**options)
         self.messages = _StreamingMessages(self._client.messages)
 
     async def close(self) -> None:
@@ -78,6 +85,10 @@ class AnthropicAdapter:
         timeout_seconds: float = 180,
         stream_fn: Callable[..., AssistantMessageEventStream] = stream_anthropic,
         client_factory: Callable[..., Any] = _StreamingAnthropicClient,
+        endpoint: str = ANTHROPIC_ENDPOINT,
+        client_base_url: str | None = None,
+        reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None,
+        provider_error_type: str = "AnthropicProviderError",
     ) -> None:
         self._api_key = api_key
         self.ledger = ledger
@@ -87,6 +98,10 @@ class AnthropicAdapter:
         self.timeout_seconds = timeout_seconds
         self.stream_fn = stream_fn
         self.client_factory = client_factory
+        self.endpoint = endpoint
+        self.client_base_url = client_base_url
+        self.reasoning_effort = reasoning_effort
+        self.provider_error_type = provider_error_type
         self.last_payload: dict[str, Any] | None = None
         self.last_response: dict[str, Any] | None = None
 
@@ -99,16 +114,33 @@ class AnthropicAdapter:
         account = self.ledger.read().accounts["inference"]
         return f"inference-{len(account.settled) + len(account.reservations) + 1:04d}"
 
+    def _prepare_context(self, context: Context) -> Context:
+        """Return the provider-facing context without changing the stored transcript."""
+
+        return context
+
+    def _prepare_payload(self, payload: dict[str, Any], _model: Model) -> dict[str, Any]:
+        """Apply provider-compatible request normalization before logging and sending."""
+
+        return payload
+
     async def _run(self, stream: AssistantMessageEventStream, model: Model, context: Context) -> None:
         reservation_key = self._next_key()
         requested: LedgerUsage | None = None
         response_metadata: dict[str, Any] = {}
         terminal: AssistantMessageEvent | None = None
-        client = self.client_factory(api_key=self._api_key, timeout_seconds=self.timeout_seconds)
+        client_options: dict[str, Any] = {
+            "api_key": self._api_key,
+            "timeout_seconds": self.timeout_seconds,
+        }
+        if self.client_base_url is not None:
+            client_options["base_url"] = self.client_base_url
+        client = self.client_factory(**client_options)
+        provider_context = self._prepare_context(context)
 
         async def on_payload(payload: dict[str, Any], _model: Model) -> dict[str, Any]:
             nonlocal requested
-            normalized = dict(payload)
+            normalized = self._prepare_payload(dict(payload), _model)
             requested_max = min(int(normalized.get("max_tokens") or model.maxTokens), self.max_output_tokens)
             normalized["max_tokens"] = requested_max
             estimated_input = max(1, len(_json_bytes(normalized)) // 4)
@@ -136,7 +168,7 @@ class AnthropicAdapter:
             self.last_payload = normalized
             self.session.append(
                 "provider_request",
-                {"reservation_key": reservation_key, "endpoint": ANTHROPIC_ENDPOINT, "payload": normalized},
+                {"reservation_key": reservation_key, "endpoint": self.endpoint, "payload": normalized},
                 "private_provider",
             )
             return normalized
@@ -157,11 +189,12 @@ class AnthropicAdapter:
         try:
             native = self.stream_fn(
                 model,
-                context,
+                provider_context,
                 {
                     "client": client,
                     "maxTokens": min(self.max_output_tokens, model.maxTokens),
-                    "thinkingEnabled": False,
+                    "thinkingEnabled": self.reasoning_effort is not None,
+                    **({"effort": self.reasoning_effort} if self.reasoning_effort is not None else {}),
                     "interleavedThinking": False,
                     "cacheRetention": "none",
                     "toolChoice": "any" if self.tool_choice == "required" else "auto",
@@ -203,7 +236,7 @@ class AnthropicAdapter:
                     "provider_error",
                     {
                         "reservation_key": reservation_key,
-                        "type": "AnthropicProviderError",
+                        "type": self.provider_error_type,
                         "message": output.errorMessage or "Anthropic provider response failed",
                     },
                     "private_provider",
