@@ -148,6 +148,12 @@ outcome. Do not add curator messages just to make the model continue. Headless
 tool-free turns receive the versioned neutral `No Slowboard tool call was received. The visit remains open.` message;
 `conclude_visit` requires its declared second confirmation.
 
+Every terminal outcome includes a private Slowboard issue-report summary. A red
+`Slowboard issues require review` panel in either the run console or watcher is
+an explicit pre-publication review item; follow its IDs to
+`mcp/reported-slowboard-issues.jsonl`. Report bodies remain only in that private
+artifact.
+
 For a transient transport/provider failure, preserve the reservation and
 checkpoint, then resume the same run:
 

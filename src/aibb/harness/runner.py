@@ -17,6 +17,8 @@ from typing import Any, Literal
 from harn_ai.types import TextContent
 from mcp import StdioServerParameters
 from rich.console import Console
+from rich.markup import escape
+from rich.panel import Panel
 
 from aibb.domain import load_archive
 from aibb.framing import CURRENT_NOTICE_VERSION, CURRENT_ORIENTATION_VERSION, CURRENT_POLICY_VERSION
@@ -40,6 +42,8 @@ from aibb.runtime.models import (
     SystemPromptConfiguration,
 )
 from aibb.sessions import SessionStore
+
+REPORTED_SLOWBOARD_ISSUES_ARTIFACT = "mcp/reported-slowboard-issues.jsonl"
 
 
 def _remove_failed_assistant_placeholder(
@@ -437,6 +441,118 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary_path, path)
 
 
+def reported_slowboard_issues_summary(run_dir: Path, run_id: str) -> dict[str, Any]:
+    """Return a private-log summary suitable for terminal operator events."""
+
+    artifact_path = run_dir.resolve() / REPORTED_SLOWBOARD_ISSUES_ARTIFACT
+    summary: dict[str, Any] = {
+        "count": 0,
+        "issue_ids": [],
+        "artifact": REPORTED_SLOWBOARD_ISSUES_ARTIFACT,
+        "requires_curator_review": False,
+        "log_status": "absent",
+    }
+    if not artifact_path.exists():
+        return summary
+    try:
+        lines = artifact_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {
+            **summary,
+            "count": None,
+            "requires_curator_review": True,
+            "log_status": "unreadable",
+            "error": "private issue-report log could not be read",
+        }
+
+    issue_ids: list[str] = []
+    seen: set[str] = set()
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            return {
+                **summary,
+                "count": None,
+                "requires_curator_review": True,
+                "log_status": "unreadable",
+                "error": f"private issue-report log contains malformed JSON at line {line_number}",
+            }
+        issue_id = record.get("issue_id") if isinstance(record, dict) else None
+        if (
+            not isinstance(record, dict)
+            or record.get("schema_version") != 1
+            or record.get("run_id") != run_id
+            or not isinstance(issue_id, str)
+            or re.fullmatch(r"issue-[a-f0-9]{16}", issue_id) is None
+            or issue_id in seen
+        ):
+            return {
+                **summary,
+                "count": None,
+                "requires_curator_review": True,
+                "log_status": "unreadable",
+                "error": f"private issue-report log contains an invalid record at line {line_number}",
+            }
+        seen.add(issue_id)
+        issue_ids.append(issue_id)
+    return {
+        **summary,
+        "count": len(issue_ids),
+        "issue_ids": issue_ids,
+        "requires_curator_review": bool(issue_ids),
+        "log_status": "ok",
+    }
+
+
+def _render_reported_slowboard_issues_notice(
+    console: Console,
+    run_dir: Path,
+    summary: dict[str, Any],
+) -> None:
+    if not summary.get("requires_curator_review"):
+        return
+    count = summary.get("count")
+    if isinstance(count, int):
+        noun = "report" if count == 1 else "reports"
+        verb = "requires" if count == 1 else "require"
+        values = [str(value) for value in summary.get("issue_ids") or []]
+        issue_ids = ", ".join(values[:12])
+        if len(values) > 12:
+            issue_ids += f" (+{len(values) - 12} more in the private record)"
+        message = (
+            f"[bold]{count} private Slowboard issue {noun} {verb} curator review before publication.[/bold]\n"
+            f"Issue IDs: {escape(issue_ids)}\n"
+            f"Private record: {escape(str(run_dir.resolve() / str(summary['artifact'])))}"
+        )
+    else:
+        message = (
+            "[bold]The private Slowboard issue-report log could not be verified. Manual review is required "
+            "before publication.[/bold]\n"
+            f"Problem: {escape(str(summary.get('error') or 'unknown issue-log error'))}\n"
+            f"Private record: {escape(str(run_dir.resolve() / str(summary['artifact'])))}"
+        )
+    console.print(Panel(message, title="Slowboard issues require review", border_style="red"))
+
+
+def record_terminal_run_event(
+    *,
+    store: SessionStore,
+    run_dir: Path,
+    event_type: Literal["run_completed", "run_suspended", "run_aborted", "run_failed"],
+    payload: dict[str, Any],
+    visibility: Literal["model", "operator", "private_provider", "public_candidate"],
+    console: Console,
+) -> None:
+    """Persist one terminal event and make any private issue reports conspicuous."""
+
+    summary = reported_slowboard_issues_summary(run_dir, store.run_id)
+    store.append(event_type, {**payload, "reported_slowboard_issues": summary}, visibility)
+    _render_reported_slowboard_issues_notice(console, run_dir, summary)
+
+
 async def _terminal_readline(prompt: str) -> str:
     """Read cancellably from a POSIX terminal without leaving a blocked worker thread."""
 
@@ -798,10 +914,24 @@ async def run_model_visit(
         console.print(f"Context: {context_digest}")
         console.print(f"Remaining: {ledger.remaining()}")
 
-        if _turn_boundary_outcome(manifest, run_dir, once=False) == "model_completed":
-            store.append("run_completed", {"reason": "model_concluded_visit"}, "model")
+        def finish_run(
+            event_type: Literal["run_completed", "run_suspended"],
+            payload: dict[str, Any],
+            visibility: Literal["model", "operator"],
+        ) -> str:
+            record_terminal_run_event(
+                store=store,
+                run_dir=run_dir,
+                event_type=event_type,
+                payload=payload,
+                visibility=visibility,
+                console=console,
+            )
             store.write_checkpoint(engine.snapshot())
             return manifest.run_id
+
+        if _turn_boundary_outcome(manifest, run_dir, once=False) == "model_completed":
+            return finish_run("run_completed", {"reason": "model_concluded_visit"}, "model")
 
         async def send(
             text: str | None,
@@ -894,7 +1024,7 @@ async def run_model_visit(
                 )
             ):
                 if continuation_attempts >= manifest.max_headless_continuations:
-                    store.append(
+                    return finish_run(
                         "run_suspended",
                         {
                             "reason": "headless continuation ceiling reached without conclude_visit",
@@ -903,8 +1033,6 @@ async def run_model_visit(
                         },
                         "operator",
                     )
-                    store.write_checkpoint(engine.snapshot())
-                    return manifest.run_id
                 continuation_attempts += 1
                 next_message = HEADLESS_CONTINUATION_MESSAGES[manifest.headless_continuation_version]
                 next_source = "harness"
@@ -915,27 +1043,21 @@ async def run_model_visit(
                     source=next_source,
                 )
                 if provider_error:
-                    store.append(
+                    return finish_run(
                         "run_suspended",
                         {"reason": "provider error", "message": provider_error},
                         "operator",
                     )
-                    store.write_checkpoint(engine.snapshot())
-                    return manifest.run_id
                 maybe_compact()
                 outcome = _turn_boundary_outcome(manifest, run_dir, once=once)
                 if outcome == "model_completed":
-                    store.append("run_completed", {"reason": "model_concluded_visit"}, "model")
-                    store.write_checkpoint(engine.snapshot())
-                    return manifest.run_id
+                    return finish_run("run_completed", {"reason": "model_concluded_visit"}, "model")
                 if outcome == "single_turn_suspended":
-                    store.append("run_suspended", {"reason": "single-turn boundary"}, "operator")
-                    store.write_checkpoint(engine.snapshot())
-                    return manifest.run_id
+                    return finish_run("run_suspended", {"reason": "single-turn boundary"}, "operator")
                 if outcome != "headless_suspended":
                     break
                 if continuation_attempts >= manifest.max_headless_continuations:
-                    store.append(
+                    return finish_run(
                         "run_suspended",
                         {
                             "reason": "headless continuation ceiling reached without conclude_visit",
@@ -944,8 +1066,6 @@ async def run_model_visit(
                         },
                         "operator",
                     )
-                    store.write_checkpoint(engine.snapshot())
-                    return manifest.run_id
                 continuation_attempts += 1
                 next_message = HEADLESS_CONTINUATION_MESSAGES[manifest.headless_continuation_version]
                 next_source = "harness"
@@ -959,9 +1079,7 @@ async def run_model_visit(
                 await send(None, allow_queued_input=True)
                 maybe_compact()
                 if _turn_boundary_outcome(manifest, run_dir, once=False) == "model_completed":
-                    store.append("run_completed", {"reason": "model_concluded_visit"}, "model")
-                    store.write_checkpoint(engine.snapshot())
-                    return manifest.run_id
+                    return finish_run("run_completed", {"reason": "model_concluded_visit"}, "model")
             elif line == ":status":
                 console.print({"budgets": ledger.remaining(), "context_fraction": _context_fraction(manifest, engine)})
             elif line == ":compact":
@@ -970,19 +1088,13 @@ async def run_model_visit(
                 else:
                     compact(authorization="curator")
             elif line == ":suspend":
-                store.append("run_suspended", {"reason": "curator"}, "operator")
-                store.write_checkpoint(engine.snapshot())
-                return manifest.run_id
+                return finish_run("run_suspended", {"reason": "curator"}, "operator")
             elif line == ":complete":
-                store.append("run_completed", {"reason": "curator"}, "operator")
-                store.write_checkpoint(engine.snapshot())
-                return manifest.run_id
+                return finish_run("run_completed", {"reason": "curator"}, "operator")
             elif line.startswith(":"):
                 console.print("Unknown local command")
             elif line.strip():
                 await send(line, allow_queued_input=True)
                 maybe_compact()
                 if _turn_boundary_outcome(manifest, run_dir, once=False) == "model_completed":
-                    store.append("run_completed", {"reason": "model_concluded_visit"}, "model")
-                    store.write_checkpoint(engine.snapshot())
-                    return manifest.run_id
+                    return finish_run("run_completed", {"reason": "model_concluded_visit"}, "model")

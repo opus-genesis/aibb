@@ -335,6 +335,35 @@ def test_run_event_renderer_shows_private_slowboard_issue_and_receipt() -> None:
     assert "recorded issue-0123456789abcdef for curator review" in rendered
 
 
+def test_run_event_renderer_repeats_reported_issue_notice_at_terminal_boundary() -> None:
+    output = StringIO()
+    renderer = RunEventRenderer(Console(file=output, color_system=None, width=120), show_reasoning=False)
+
+    stopped = renderer.render(
+        {
+            "type": "run_completed",
+            "payload": {
+                "reason": "model_concluded_visit",
+                "reported_slowboard_issues": {
+                    "count": 1,
+                    "issue_ids": ["issue-0123456789abcdef"],
+                    "artifact": "mcp/reported-slowboard-issues.jsonl",
+                    "requires_curator_review": True,
+                    "log_status": "ok",
+                },
+            },
+        }
+    )
+
+    assert stopped is True
+    rendered = output.getvalue()
+    assert "Slowboard issues require review" in rendered
+    assert "1 private Slowboard issue report" in rendered
+    assert "issue-0123456789abcdef" in rendered
+    assert "mcp/reported-slowboard-issues.jsonl" in rendered
+    assert "run completed · model_concluded_visit" in rendered
+
+
 def test_run_event_renderer_labels_google_hidden_reasoning_separately() -> None:
     output = StringIO()
     renderer = RunEventRenderer(Console(file=output, color_system=None, width=120), show_reasoning=True)

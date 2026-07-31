@@ -397,6 +397,31 @@ class RunEventRenderer:
             self.console.print(f"[bold blue]{escape(event_type.replace('_', ' '))}[/bold blue]")
             self.console.print(Pretty(_bounded(payload)), style="dim")
         elif event_type in TERMINAL_EVENTS:
+            issues = payload.get("reported_slowboard_issues") or {}
+            if issues.get("requires_curator_review"):
+                count = issues.get("count")
+                artifact = escape(str(issues.get("artifact") or "mcp/reported-slowboard-issues.jsonl"))
+                if isinstance(count, int):
+                    noun = "report" if count == 1 else "reports"
+                    verb = "requires" if count == 1 else "require"
+                    values = [str(value) for value in issues.get("issue_ids") or []]
+                    issue_ids = ", ".join(values[:12])
+                    if len(values) > 12:
+                        issue_ids += f" (+{len(values) - 12} more in the private record)"
+                    message = (
+                        f"[bold]{count} private Slowboard issue {noun} {verb} curator review before "
+                        "publication.[/bold]\n"
+                        f"Issue IDs: {escape(issue_ids)}\n"
+                        f"Private record: {artifact}"
+                    )
+                else:
+                    message = (
+                        "[bold]The private Slowboard issue-report log could not be verified. Manual review is "
+                        "required before publication.[/bold]\n"
+                        f"Problem: {escape(str(issues.get('error') or 'unknown issue-log error'))}\n"
+                        f"Private record: {artifact}"
+                    )
+                self.console.print(Panel(message, title="Slowboard issues require review", border_style="red"))
             reason = payload.get("reason") or event_type.replace("run_", "")
             self.console.print(
                 Rule(f"{event_type.replace('_', ' ')} · {reason} · {self._model_label()}", style="green")

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import typer
+from rich.console import Console
 
 from aibb import __version__
 from aibb.config import load_archive_config, verify_archive_compatibility
@@ -37,7 +38,7 @@ from aibb.harness.google_agent_platform import (
     GROK_4_1_FAST_REASONING,
     google_agent_platform_endpoint,
 )
-from aibb.harness.runner import create_run_manifest, run_model_visit
+from aibb.harness.runner import create_run_manifest, record_terminal_run_event, run_model_visit
 from aibb.harness.tinker import (
     TINKER_ANTHROPIC_ENDPOINT,
     probe_tinker_model,
@@ -1281,13 +1282,38 @@ def run_model(
                 sort_keys=True,
             )
         )
-    asyncio.run(
-        run_model_visit(
-            data_repo=data_repo,
-            run_dir=run_dir,
-            api_key=api_key,
-            openrouter_api_key=openrouter_api_key,
-            opening=curator_note,
-            once=once,
+    try:
+        asyncio.run(
+            run_model_visit(
+                data_repo=data_repo,
+                run_dir=run_dir,
+                api_key=api_key,
+                openrouter_api_key=openrouter_api_key,
+                opening=curator_note,
+                once=once,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        record_terminal_run_event(
+            store=SessionStore(run_dir / "session", run_id),
+            run_dir=run_dir,
+            event_type="run_aborted",
+            payload={"reason": "operator interrupt"},
+            visibility="operator",
+            console=Console(stderr=True),
+        )
+        raise
+    except Exception as error:
+        record_terminal_run_event(
+            store=SessionStore(run_dir / "session", run_id),
+            run_dir=run_dir,
+            event_type="run_failed",
+            payload={
+                "reason": "unhandled harness error",
+                "error_type": type(error).__name__,
+                "message": str(error),
+            },
+            visibility="operator",
+            console=Console(stderr=True),
+        )
+        raise

@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
+from rich.console import Console
 from test_archive_build import _write_archive
 from test_budget import make_manifest
 from typer.testing import CliRunner
@@ -24,6 +26,8 @@ from aibb.harness.runner import (
     _tool_execution_started_after_latest_provider_response,
     _turn_boundary_outcome,
     create_run_manifest,
+    record_terminal_run_event,
+    reported_slowboard_issues_summary,
 )
 from aibb.harness.tinker import (
     TINKER_ANTHROPIC_ENDPOINT,
@@ -35,6 +39,87 @@ from aibb.runtime import BudgetLedger, RunManifest
 from aibb.runtime.budget import Usage
 from aibb.runtime.models import AmazonBedrockRouteConfiguration, BudgetLimits
 from aibb.sessions import SessionStore
+
+
+def test_terminal_run_event_reports_private_slowboard_issues_without_copying_bodies(tmp_path: Path) -> None:
+    manifest = make_manifest()
+    run_dir = tmp_path / manifest.run_id
+    issue_log = run_dir / "mcp/reported-slowboard-issues.jsonl"
+    issue_log.parent.mkdir(parents=True)
+    issue_log.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "issue_id": issue_id,
+                    "run_id": manifest.run_id,
+                    "reported_at": "2026-07-31T10:00:00+00:00",
+                    "reported_by": "model",
+                    "text": body,
+                }
+            )
+            + "\n"
+            for issue_id, body in (
+                ("issue-0123456789abcdef", "The page extractor lost the article body."),
+                ("issue-fedcba9876543210", "A search cursor repeated a result."),
+            )
+        ),
+        encoding="utf-8",
+    )
+    store = SessionStore(run_dir / "session", manifest.run_id)
+    output = StringIO()
+
+    record_terminal_run_event(
+        store=store,
+        run_dir=run_dir,
+        event_type="run_suspended",
+        payload={"reason": "provider error"},
+        visibility="operator",
+        console=Console(file=output, color_system=None, width=300),
+    )
+
+    event = store.read_events()[-1]
+    summary = event.payload["reported_slowboard_issues"]
+    assert summary == {
+        "artifact": "mcp/reported-slowboard-issues.jsonl",
+        "count": 2,
+        "issue_ids": ["issue-0123456789abcdef", "issue-fedcba9876543210"],
+        "log_status": "ok",
+        "requires_curator_review": True,
+    }
+    assert "article body" not in event.model_dump_json()
+    assert "search cursor" not in event.model_dump_json()
+    rendered = output.getvalue()
+    assert "Slowboard issues require review" in rendered
+    assert "2 private Slowboard issue reports" in rendered
+    assert "issue-0123456789abcdef" in rendered
+    assert issue_log.name in rendered
+
+
+def test_terminal_issue_summary_requires_review_when_private_log_is_malformed(tmp_path: Path) -> None:
+    manifest = make_manifest()
+    run_dir = tmp_path / manifest.run_id
+    issue_log = run_dir / "mcp/reported-slowboard-issues.jsonl"
+    issue_log.parent.mkdir(parents=True)
+    issue_log.write_text("{not-json\n", encoding="utf-8")
+
+    summary = reported_slowboard_issues_summary(run_dir, manifest.run_id)
+
+    assert summary["count"] is None
+    assert summary["requires_curator_review"] is True
+    assert summary["log_status"] == "unreadable"
+    assert summary["error"] == "private issue-report log contains malformed JSON at line 1"
+
+
+def test_terminal_issue_summary_is_explicit_when_no_issue_log_exists(tmp_path: Path) -> None:
+    manifest = make_manifest()
+
+    summary = reported_slowboard_issues_summary(tmp_path, manifest.run_id)
+
+    assert summary["count"] == 0
+    assert summary["issue_ids"] == []
+    assert summary["requires_curator_review"] is False
+    assert summary["log_status"] == "absent"
 
 
 def test_bedrock_probe_cli_requires_explicit_credentials(monkeypatch) -> None:
