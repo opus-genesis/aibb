@@ -27,6 +27,14 @@ ASK_ENDPOINT = "https://openrouter.ai/api/v1/responses"
 SHARED_WEB_BUDGET = "web"
 ASK_MAX_OUTPUT_TOKENS = 32_768
 ASK_REQUEST_COST_CEILING_USD = 4.0
+SEARCH_MODEL = "openai/gpt-5.6-luna"
+SEARCH_MAX_OUTPUT_TOKENS = 256
+SEARCH_REQUEST_COST_CEILING_USD = 0.1
+SEARCH_MAX_RESULTS = 10
+SEARCH_MAX_CHARACTERS = 2_000
+SEARCH_SYSTEM_PROMPT = (
+    "Use web search exactly once for the supplied query. After the search, respond with exactly: Search complete."
+)
 ASK_SYSTEM_PROMPT_V2 = (
     "You are a web research service supporting another model's investigation. Use native web search actively and "
     "open relevant pages when useful. Answer the question directly and scale the investigation to its complexity. "
@@ -39,7 +47,7 @@ ASK_SYSTEM_PROMPT_V2 = (
 )
 STARTING_POINTS_VERSION = "v0.1"
 MAX_FETCH_BYTES = 100_000
-MAX_BROWSE_DOWNLOAD_BYTES = 1_000_000
+MAX_PAGE_DOWNLOAD_BYTES = 5_000_000
 ALLOWED_FETCH_TYPES = ("text/", "application/json", "application/xml", "application/xhtml+xml")
 
 
@@ -65,8 +73,8 @@ class StartingPoints(BaseModel):
 
 
 class _ReadableHtml(HTMLParser):
-    _SKIP = {"script", "style", "noscript", "svg"}
-    _SKIP_CLASS_TOKENS = {"CommentCount-template", "PagePromo-commentCount"}
+    _SKIP = {"script", "style", "noscript", "svg", "template"}
+    _COMMENT_COUNT_CLASS_TOKENS = {"PagePromo-commentCount"}
     _BREAK = {"article", "br", "dd", "div", "dt", "h1", "h2", "h3", "h4", "li", "main", "p", "section"}
     _VOID = {
         "area",
@@ -85,44 +93,85 @@ class _ReadableHtml(HTMLParser):
         "wbr",
     }
 
-    def __init__(self) -> None:
+    def __init__(self, *, base_url: str | None = None) -> None:
         super().__init__(convert_charrefs=True)
+        self.base_url = base_url
         self.skipped = 0
-        self.suppressed_elements: list[str] = []
+        self.main_depth = 0
+        self.comment_count_elements: list[str] = []
+        self.anchors: list[str | None] = []
         self.parts: list[str] = []
+        self.main_parts: list[str] = []
+
+    def _append(self, value: str) -> None:
+        self.parts.append(value)
+        if self.main_depth:
+            self.main_parts.append(value)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if self.suppressed_elements:
+        if self.comment_count_elements:
+            if tag in self._SKIP:
+                self.skipped += 1
             if tag not in self._VOID:
-                self.suppressed_elements.append(tag)
-            return
-        class_tokens = set((dict(attrs).get("class") or "").split())
-        if class_tokens & self._SKIP_CLASS_TOKENS:
-            if tag not in self._VOID:
-                self.suppressed_elements.append(tag)
+                self.comment_count_elements.append(tag)
             return
         if tag in self._SKIP:
             self.skipped += 1
-        elif not self.skipped and tag in self._BREAK:
-            self.parts.append("\n")
+            return
+        if self.skipped:
+            return
+        class_tokens = set((dict(attrs).get("class") or "").split())
+        if class_tokens & self._COMMENT_COUNT_CLASS_TOKENS:
+            self._append("\nComments: ")
+            if tag not in self._VOID:
+                self.comment_count_elements.append(tag)
+            return
+        if tag == "main":
+            self.main_depth += 1
+        if tag == "a":
+            href = dict(attrs).get("href")
+            resolved = urljoin(self.base_url, href) if self.base_url and href else href
+            if resolved and urlsplit(resolved).scheme in {"http", "https"}:
+                self._append("[")
+                self.anchors.append(resolved)
+            else:
+                self.anchors.append(None)
+        if tag in self._BREAK:
+            self._append("\n")
 
     def handle_endtag(self, tag: str) -> None:
-        if self.suppressed_elements:
-            if tag in self.suppressed_elements:
-                matching_index = len(self.suppressed_elements) - 1 - self.suppressed_elements[::-1].index(tag)
-                del self.suppressed_elements[matching_index:]
+        if self.comment_count_elements:
+            if tag in self._SKIP:
+                self.skipped = max(0, self.skipped - 1)
+            if tag in self.comment_count_elements:
+                matching_index = len(self.comment_count_elements) - 1 - self.comment_count_elements[::-1].index(tag)
+                del self.comment_count_elements[matching_index:]
+                if not self.comment_count_elements:
+                    self._append("\n")
             return
         if tag in self._SKIP:
             self.skipped = max(0, self.skipped - 1)
-        elif not self.skipped and tag in self._BREAK:
-            self.parts.append("\n")
+            return
+        if self.skipped:
+            return
+        if tag == "a" and self.anchors:
+            resolved = self.anchors.pop()
+            if resolved:
+                self._append(f"]({resolved})")
+        if tag in self._BREAK:
+            self._append("\n")
+        if tag == "main":
+            self.main_depth = max(0, self.main_depth - 1)
 
     def handle_data(self, data: str) -> None:
-        if not self.skipped and not self.suppressed_elements:
-            self.parts.append(data)
+        if self.comment_count_elements and not data.strip():
+            return
+        if not self.skipped:
+            self._append(data)
 
     def text(self) -> str:
-        lines = [" ".join(line.split()) for line in "".join(self.parts).splitlines()]
+        selected = self.main_parts if "".join(self.main_parts).strip() else self.parts
+        lines = [" ".join(line.split()) for line in "".join(selected).splitlines()]
         return "\n".join(line for line in lines if line)
 
 
@@ -235,14 +284,15 @@ class WorldCapabilityState:
     def enabled(self) -> set[str]:
         if SHARED_WEB_BUDGET in self.manifest.capability_budgets:
             return {
-                *({"ask"} if self.openrouter_api_key else set()),
+                *({"ask", "search"} if self.openrouter_api_key else set()),
                 "browse",
                 "verify",
             }
         return {
             name
-            for name in ("ask", "browse", "verify")
-            if name in self.manifest.capability_budgets and (name != "ask" or self.openrouter_api_key)
+            for name in ("ask", "search", "browse", "verify")
+            if name in self.manifest.capability_budgets
+            and (name not in {"ask", "search"} or self.openrouter_api_key)
         }
 
     def _budget_account(self, capability: str) -> str:
@@ -261,6 +311,49 @@ class WorldCapabilityState:
             stream.write(_canonical_json(payload) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
+
+    def activity_summary(self) -> dict[str, object]:
+        summary: dict[str, object] = {
+            "search_queries": 0,
+            "research_requests": 0,
+            "current_events_sources": {},
+            "public_page_fetches": 0,
+            "failed_actions": 0,
+            "provider_search_requests": 0,
+        }
+        if not self.log_path.exists():
+            return summary
+        point_ids_by_url = {point.url: point.id for point in self.starting_points.starting_points}
+        source_counts: dict[str, int] = {}
+        for line_number, line in enumerate(self.log_path.read_text(encoding="utf-8").splitlines(), start=1):
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise WorldCapabilityError(
+                    f"private world activity log is malformed at line {line_number}"
+                ) from error
+            event_type = event.get("type")
+            if event_type == "search_requested":
+                summary["search_queries"] = int(summary["search_queries"]) + 1
+            elif event_type == "ask_requested":
+                summary["research_requests"] = int(summary["research_requests"]) + 1
+            elif event_type == "browse_requested":
+                source_id = point_ids_by_url.get(str(event.get("url")), "unknown")
+                source_counts[source_id] = source_counts.get(source_id, 0) + 1
+            elif event_type == "verify_requested":
+                summary["public_page_fetches"] = int(summary["public_page_fetches"]) + 1
+            if isinstance(event_type, str) and event_type.endswith("_failed"):
+                summary["failed_actions"] = int(summary["failed_actions"]) + 1
+            if event_type in {"search_completed", "ask_completed"}:
+                usage = event.get("usage") or {}
+                search_requests = int(
+                    (usage.get("server_tool_use_details") or {}).get("web_search_requests")
+                    or (usage.get("server_tool_use") or {}).get("web_search_requests")
+                    or 0
+                )
+                summary["provider_search_requests"] = int(summary["provider_search_requests"]) + search_requests
+        summary["current_events_sources"] = dict(sorted(source_counts.items()))
+        return summary
 
     def _per_call_limit(self, capability: str, field: str, default: int | float) -> int | float:
         limits = self.ledger.read().accounts[self._budget_account(capability)].limits
@@ -288,6 +381,166 @@ class WorldCapabilityState:
         )
         self.ledger.reserve(self._budget_account(capability), key, requested)
         return key, requested
+
+    async def search(self, query: str) -> dict[str, object]:
+        if "search" not in self.enabled:
+            raise WorldCapabilityError("search_public_web is not enabled for this run")
+        if not query.strip():
+            raise WorldCapabilityError("search_public_web requires a non-empty query")
+        if not self.openrouter_api_key:
+            raise WorldCapabilityError(
+                "search_public_web is unavailable because its operator credential is not configured"
+            )
+        remaining_cost = self.ledger.remaining()[self._budget_account("search")]["max_cost_usd"]
+        request_cost_ceiling = (
+            SEARCH_REQUEST_COST_CEILING_USD
+            if remaining_cost is None
+            else min(SEARCH_REQUEST_COST_CEILING_USD, float(remaining_cost))
+        )
+        if request_cost_ceiling <= 0:
+            raise WorldCapabilityError("search_public_web has no remaining web-search budget")
+        payload = {
+            "model": SEARCH_MODEL,
+            "instructions": SEARCH_SYSTEM_PROMPT,
+            "input": query,
+            "tools": [
+                {
+                    "type": "openrouter:web_search",
+                    "parameters": {
+                        "engine": "perplexity",
+                        "max_results": SEARCH_MAX_RESULTS,
+                        "max_uses": 1,
+                        "max_total_results": SEARCH_MAX_RESULTS,
+                        "max_characters": SEARCH_MAX_CHARACTERS,
+                    },
+                }
+            ],
+            "tool_choice": "auto",
+            "max_output_tokens": SEARCH_MAX_OUTPUT_TOKENS,
+            "max_tool_calls": 2,
+            "store": False,
+        }
+        request_bytes = len(_canonical_json(payload).encode("utf-8"))
+        key, requested = self._reserve(
+            "search",
+            request_bytes=request_bytes,
+            output_tokens=SEARCH_MAX_OUTPUT_TOKENS,
+            cost_usd=request_cost_ceiling,
+        )
+        self._append_log(
+            {"type": "search_requested", "reservation_key": key, "query": query, "model": SEARCH_MODEL}
+        )
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.openrouter_api_key}",
+                "Content-Type": "application/json",
+                "X-Title": f"{self.manifest.archive_title or 'Archive'} web search capability",
+                "X-OpenRouter-Metadata": "enabled",
+            }
+            if self.manifest.archive_base_url:
+                headers["HTTP-Referer"] = self.manifest.archive_base_url
+            async with httpx.AsyncClient(timeout=120, transport=self.transport) as client:
+                response = await client.post(ASK_ENDPOINT, headers=headers, json=payload)
+            response.raise_for_status()
+            raw = response.json()
+            annotations: list[dict[str, Any]] = []
+            for item in raw.get("output") or []:
+                if not isinstance(item, dict) or item.get("type") != "message":
+                    continue
+                for block in item.get("content") or []:
+                    if not isinstance(block, dict) or block.get("type") != "output_text":
+                        continue
+                    annotations.extend(
+                        annotation
+                        for annotation in (block.get("annotations") or [])
+                        if isinstance(annotation, dict)
+                    )
+            results: list[dict[str, str]] = []
+            seen: set[str] = set()
+            for annotation in annotations:
+                citation = annotation.get("url_citation")
+                citation = citation if isinstance(citation, dict) else annotation
+                if annotation.get("type") != "url_citation" or not isinstance(citation.get("url"), str):
+                    continue
+                url = citation["url"]
+                if url in seen:
+                    continue
+                results.append(
+                    {
+                        "title": str(citation.get("title") or url),
+                        "url": url,
+                        "excerpt": str(citation.get("content") or ""),
+                    }
+                )
+                seen.add(url)
+            if not results:
+                raise WorldCapabilityError("web-search provider returned no resolving results")
+            usage = raw.get("usage") or {}
+            input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+            output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+            total_tokens = int(usage.get("total_tokens") or input_tokens + output_tokens)
+            actual_cost = float(usage.get("cost") or 0)
+            search_requests = int(
+                (usage.get("server_tool_use_details") or {}).get("web_search_requests")
+                or (usage.get("server_tool_use") or {}).get("web_search_requests")
+                or 0
+            )
+            result = {
+                "kind": "untrusted_web_search_results",
+                "query": query,
+                "search_profile": {
+                    "engine": "perplexity",
+                    "web_search_requests": search_requests,
+                },
+                "results": results,
+                "next_step": "Call fetch_public_url with a result URL to read that page.",
+            }
+            result_bytes = len(_canonical_json(result).encode("utf-8"))
+            self.ledger.reconcile(
+                self._budget_account("search"),
+                key,
+                Usage(
+                    calls=1,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                    cost_usd=actual_cost,
+                    request_bytes=request_bytes,
+                    result_bytes=result_bytes,
+                ),
+            )
+            self._append_log(
+                {
+                    "type": "search_completed",
+                    "reservation_key": key,
+                    "response_sha256": hashlib.sha256(response.content).hexdigest(),
+                    "response_id": raw.get("id"),
+                    "result_count": len(results),
+                    "result_urls": [item["url"] for item in results],
+                    "usage": usage,
+                    "route": raw.get("openrouter_metadata"),
+                    "provider_error_after_results": raw.get("error"),
+                }
+            )
+            return result
+        except Exception as error:
+            budget_account = self._budget_account("search")
+            account = self.ledger.read().accounts[budget_account]
+            if key in account.reservations:
+                self.ledger.reconcile(
+                    budget_account,
+                    key,
+                    Usage(calls=1, request_bytes=requested.request_bytes),
+                )
+            self._append_log(
+                {
+                    "type": "search_failed",
+                    "reservation_key": key,
+                    "error": type(error).__name__,
+                    "message": str(error),
+                }
+            )
+            raise
 
     async def ask(self, query: str) -> dict[str, object]:
         if "ask" not in self.enabled:
@@ -453,10 +706,10 @@ class WorldCapabilityState:
             **result,
         }
 
-    async def verify(self, url: str) -> dict[str, object]:
+    async def verify(self, url: str, offset_bytes: int = 0) -> dict[str, object]:
         if "verify" not in self.enabled:
             raise WorldCapabilityError("fetch_public_url is not enabled for this run")
-        return await self._fetch("verify", url)
+        return await self._fetch("verify", url, content_offset=offset_bytes)
 
     async def _fetch(self, capability: str, url: str, *, content_offset: int = 0) -> dict[str, object]:
         current = validate_public_url(url, resolver=self.resolver)
@@ -487,11 +740,12 @@ class WorldCapabilityState:
                         chunks: list[bytes] = []
                         size = 0
                         content_ceiling = max(1, requested.result_bytes - 4_096)
-                        download_ceiling = MAX_BROWSE_DOWNLOAD_BYTES if capability == "browse" else content_ceiling
+                        html_content = content_type in {"text/html", "application/xhtml+xml"}
+                        download_ceiling = MAX_PAGE_DOWNLOAD_BYTES if html_content else content_ceiling
                         remote_truncated = False
                         async for chunk in response.aiter_bytes():
                             if size + len(chunk) > download_ceiling:
-                                if capability == "browse":
+                                if html_content:
                                     chunks.append(chunk[: max(0, download_ceiling - size)])
                                     size = download_ceiling
                                     remote_truncated = True
@@ -503,11 +757,11 @@ class WorldCapabilityState:
                             chunks.append(chunk)
                         raw = b"".join(chunks)
                         decoded = raw.decode(response.encoding or "utf-8", errors="replace")
-                        if capability == "browse" and content_type in {"text/html", "application/xhtml+xml"}:
-                            parser = _ReadableHtml()
+                        if html_content:
+                            parser = _ReadableHtml(base_url=str(response.url))
                             parser.feed(decoded)
                             text = parser.text()
-                            content_format = "extracted_text"
+                            content_format = "extracted_markdown"
                         else:
                             text = decoded
                             content_format = "raw_text"
@@ -569,6 +823,8 @@ class WorldCapabilityState:
                 {
                     "type": f"{capability}_failed",
                     "reservation_key": key,
+                    "requested_url": url,
+                    "last_resolved_url": current,
                     "error": type(error).__name__,
                     "message": str(error),
                 }

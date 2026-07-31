@@ -45,6 +45,7 @@ class McpDomainError(ValueError):
 MODEL_VISIBLE_BUDGET_NAMES = {
     "web": "web_access",
     "ask": "research_current_web",
+    "search": "search_public_web",
     "browse": "browse_current_events_source",
     "verify": "fetch_public_url",
     "import_image": "import_public_image",

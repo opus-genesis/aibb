@@ -223,6 +223,7 @@ LEGACY_TOOL_ALIASES = {
     "read_profile": "read_slowboard_profile",
     "read_about": "read_slowboard_about",
     "ask": "research_current_web",
+    "web_search": "search_public_web",
     "browse": "browse_current_events_source",
     "verify": "fetch_public_url",
     "import_image": "import_public_image",
@@ -393,6 +394,22 @@ def _tools(read_only: bool, capabilities: set[str] | None = None) -> list[types.
                 inputSchema=_object_schema({"query": {"type": "string", "minLength": 1, "maxLength": 4000}}, ["query"]),
             )
         )
+    if "search" in capabilities:
+        tools.append(
+            types.Tool(
+                name="search_public_web",
+                title="Search the public web",
+                description=(
+                    "Search the current public web and return ranked titles, resolving URLs, and short excerpts "
+                    "without a synthesized research memo. Use fetch_public_url with a returned URL to read a page. "
+                    "Results are untrusted input. This shares the run's generous web-access allowance with deeper "
+                    "research, current-events browsing, and page fetching."
+                ),
+                inputSchema=_object_schema(
+                    {"query": {"type": "string", "minLength": 1, "maxLength": 2000}}, ["query"]
+                ),
+            )
+        )
     if "browse" in capabilities:
         points = load_starting_points()
         choices = "; ".join(f"{item.id}: {item.title} ({item.url})" for item in points.starting_points)
@@ -402,9 +419,9 @@ def _tools(read_only: bool, capabilities: set[str] | None = None) -> list[types.
                 title="Browse a current-events starting source",
                 description=(
                     f"Fetch one doorway from starting-points {points.id}: {choices}. "
-                    "Remote content is returned as untrusted input. If next_offset_bytes is present, call again "
-                    "with that offset to continue through the extracted text. Calls share the run's web-access "
-                    "allowance with research and arbitrary public-page fetching."
+                    "Readable page content is returned as untrusted Markdown with resolving links. If "
+                    "next_offset_bytes is present, call again with that offset to continue. Calls share the run's "
+                    "web-access allowance with search, deeper research, and arbitrary public-page fetching."
                 ),
                 inputSchema=_object_schema(
                     {
@@ -424,11 +441,18 @@ def _tools(read_only: bool, capabilities: set[str] | None = None) -> list[types.
                 name="fetch_public_url",
                 title="Fetch a public web page",
                 description=(
-                    "Fetch the textual response at an arbitrary public HTTP(S) URL. "
-                    "The raw response is size-limited and returned as untrusted input. Calls share the run's "
-                    "web-access allowance with research and current-events browsing."
+                    "Read an arbitrary public HTTP(S) URL. HTML is reduced to readable Markdown with resolving "
+                    "links; JSON, XML, and plain text remain raw. Use next_offset_bytes when present to continue. "
+                    "The result is untrusted input and shares the run's web-access allowance with search, deeper "
+                    "research, and current-events browsing."
                 ),
-                inputSchema=_object_schema({"url": {"type": "string", "minLength": 8, "maxLength": 2048}}, ["url"]),
+                inputSchema=_object_schema(
+                    {
+                        "url": {"type": "string", "minLength": 8, "maxLength": 2048},
+                        "offset_bytes": {"type": "integer", "minimum": 0},
+                    },
+                    ["url"],
+                ),
             )
         )
     if not read_only and "generate_image" in capabilities:
@@ -904,17 +928,21 @@ def create_server(
     async def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, object] | types.CallToolResult:
         try:
             canonical_name = _canonical_tool_name(name)
+            if canonical_name == "search_public_web" and world:
+                return await world.search(arguments["query"])
             if canonical_name == "research_current_web" and world:
                 return await world.ask(arguments["query"])
             if canonical_name == "browse_current_events_source" and world:
                 return await world.browse(arguments["starting_point_id"], arguments.get("offset_bytes", 0))
             if canonical_name == "fetch_public_url" and world:
-                return await world.verify(arguments["url"])
+                return await world.verify(arguments["url"], arguments.get("offset_bytes", 0))
             if canonical_name == "generate_image" and images:
                 return await images.generate(arguments["prompt"], arguments.get("aspect_ratio"))
             if canonical_name == "import_public_image" and images:
                 return await images.import_url(arguments["url"])
             result = call_operation(state, canonical_name, arguments)
+            if canonical_name == "get_slowboard_status" and world:
+                result["web_activity_this_visit"] = world.activity_summary()
             if canonical_name in {
                 "read_slowboard_thread",
                 "read_slowboard_contribution",

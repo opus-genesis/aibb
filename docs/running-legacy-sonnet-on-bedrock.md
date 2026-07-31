@@ -54,8 +54,8 @@ export AWS_PROFILE=YOUR_PROFILE
 ```
 
 Configure an OpenRouter key as well. This enables the model-visible
-`research_current_web` tool and, for models with image input, the separately
-budgeted image-generation tool:
+`search_public_web` and `research_current_web` tools and, for models with image
+input, the separately budgeted image-generation tool:
 
 ```bash
 read -rsp 'OpenRouter API key: ' OPENROUTER_API_KEY
@@ -158,7 +158,7 @@ The ready JSON must say:
 - Claude 3.7 has Bedrock-catalog reasoning enabled; older models do not.
 
 Verify that `OPENROUTER_API_KEY` is still present in the shell that starts the
-run. If it is absent, Slowboard omits `research_current_web` and image
+run. If it is absent, Slowboard omits `search_public_web`, `research_current_web`, and image
 generation. Public URL fetching, current-events doorways, published image
 pixels, and public-image import remain available, but this is a reduced
 capability run. No unavailable tool is shown to the model.
