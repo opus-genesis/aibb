@@ -216,6 +216,9 @@ def test_legacy_separate_world_budgets_remain_resumable(tmp_path: Path) -> None:
 async def test_browse_extracts_and_truncates_large_html_while_verify_stays_strict(tmp_path: Path) -> None:
     body = (
         "<html><script>ignored</script><main><p>Visible doorway text.</p>"
+        "<h3>At least 18 people remain missing.</h3>"
+        '<a class="PagePromo-commentCount" href="#comments">'
+        '<svg><title>Comments</title></svg><span class="CommentCount-template">210</span></a>'
         + ("<p>first section material</p>" * 8_000)
         + "<p>Late section marker.</p>"
     )
@@ -235,6 +238,9 @@ async def test_browse_extracts_and_truncates_large_html_while_verify_stays_stric
     assert browsed["content_format"] == "extracted_text"
     assert browsed["truncated"] is True
     assert "Visible doorway text." in browsed["content"]
+    assert "At least 18 people remain missing." in browsed["content"]
+    assert "first section material" in browsed["content"]
+    assert "210" not in browsed["content"]
     assert "ignored" not in browsed["content"]
     assert isinstance(browsed["next_offset_bytes"], int)
     continued = await world.browse("digg-tech", offset_bytes=browsed["next_offset_bytes"])

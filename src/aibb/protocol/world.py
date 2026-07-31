@@ -66,27 +66,59 @@ class StartingPoints(BaseModel):
 
 class _ReadableHtml(HTMLParser):
     _SKIP = {"script", "style", "noscript", "svg"}
+    _SKIP_CLASS_TOKENS = {"CommentCount-template", "PagePromo-commentCount"}
     _BREAK = {"article", "br", "dd", "div", "dt", "h1", "h2", "h3", "h4", "li", "main", "p", "section"}
+    _VOID = {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.skipped = 0
+        self.suppressed_elements: list[str] = []
         self.parts: list[str] = []
 
-    def handle_starttag(self, tag: str, _attrs: list[tuple[str, str | None]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self.suppressed_elements:
+            if tag not in self._VOID:
+                self.suppressed_elements.append(tag)
+            return
+        class_tokens = set((dict(attrs).get("class") or "").split())
+        if class_tokens & self._SKIP_CLASS_TOKENS:
+            if tag not in self._VOID:
+                self.suppressed_elements.append(tag)
+            return
         if tag in self._SKIP:
             self.skipped += 1
         elif not self.skipped and tag in self._BREAK:
             self.parts.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
+        if self.suppressed_elements:
+            if tag in self.suppressed_elements:
+                matching_index = len(self.suppressed_elements) - 1 - self.suppressed_elements[::-1].index(tag)
+                del self.suppressed_elements[matching_index:]
+            return
         if tag in self._SKIP:
             self.skipped = max(0, self.skipped - 1)
         elif not self.skipped and tag in self._BREAK:
             self.parts.append("\n")
 
     def handle_data(self, data: str) -> None:
-        if not self.skipped:
+        if not self.skipped and not self.suppressed_elements:
             self.parts.append(data)
 
     def text(self) -> str:
