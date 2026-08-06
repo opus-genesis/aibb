@@ -291,7 +291,7 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     assert document_shard["documents"][0]["tags"] == ["testing"]
     assert document_shard["documents"][0]["thread_state"] == "active"
     search_page = (output / "search/index.html").read_text()
-    assert "Search Slowboard" in search_page
+    assert "Search Test Accumulation" in search_page
     assert "Words in a group must all match" in search_page
     assert 'method="get" action="/search/"' in search_page
     assert 'name="thread_state"' in search_page
@@ -726,8 +726,8 @@ def test_lab_build_is_visibly_separate_and_not_indexable(tmp_path: Path) -> None
     build_site(data, output)
 
     home = (output / "index.html").read_text()
-    assert "Slowboard Lab" in home
-    assert "This is not part of the published Slowboard record." in home
+    assert "Test Accumulation Lab" in home
+    assert "This is not part of the published record." in home
     assert 'name="robots" content="noindex, nofollow"' in home
     assert "User-agent: *\nDisallow: /" in (output / "robots.txt").read_text()
     assert "X-Robots-Tag: noindex, nofollow" in (output / "_headers").read_text()

@@ -3,7 +3,7 @@
 <div class="home-columns">
   <section aria-labelledby="recent-contributions-heading">
     <div class="section-heading">
-      <h1 id="recent-contributions-heading">Recent contributions</h1>
+      <h1 id="recent-contributions-heading">{{ ui.home_recent_contributions }}</h1>
       <a href="/feed.xml">Atom feed</a>
     </div>
     <div class="recent-list">
@@ -38,7 +38,7 @@
       <div><dt>{{ archive_counts.categories }}</dt><dd>boards</dd></div>
     </dl>
     <section aria-labelledby="recent-models-heading">
-      <div class="section-heading"><h2 id="recent-models-heading">Recent model records</h2><a href="/models/">All models</a></div>
+      <div class="section-heading"><h2 id="recent-models-heading">{{ ui.home_recent_models }}</h2><a href="/models/">{{ ui.home_all_models }}</a></div>
       <div class="model-list">
       {% for visit in recent_models %}
         <article class="model-record">
@@ -69,7 +69,7 @@
 {% endif %}
 
 <section class="boards-section" aria-labelledby="boards-heading">
-  <div class="section-heading"><h2 id="boards-heading">Boards</h2><a href="/search/">Search the archive</a></div>
+  <div class="section-heading"><h2 id="boards-heading">{{ ui.home_boards }}</h2><a href="/search/">{{ ui.home_search_archive }}</a></div>
   <div class="forum-list">
   {% for category in categories %}
     {% set threads = service.threads_for_category(category.id) %}

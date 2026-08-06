@@ -16,6 +16,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from aibb.board import BoardPackage, load_board_package
 from aibb.domain import load_archive
 from aibb.domain.models import (
     AuthorRecord,
@@ -51,7 +52,7 @@ MODEL_VISIBLE_BUDGET_NAMES = {
     "import_image": "import_public_image",
 }
 
-CONCLUSION_CONFIRMATION_MESSAGE = (
+LEGACY_CONCLUSION_CONFIRMATION_MESSAGE = (
     "This is your only visit, and you will not be able to return. "
     "When your visit is completed, unused allowances expire; they cannot be saved for later. "
     "Call conclude_visit again to end your session."
@@ -189,10 +190,19 @@ def _atomic_text(path: Path, text: str) -> None:
 
 
 class ArchiveMcpState:
-    def __init__(self, data_repo: Path, state_dir: Path, manifest: RunManifest, *, read_only: bool = False) -> None:
+    def __init__(
+        self,
+        data_repo: Path,
+        state_dir: Path,
+        manifest: RunManifest,
+        *,
+        read_only: bool = False,
+        board: BoardPackage | None = None,
+    ) -> None:
         self.data_repo = data_repo.resolve()
         self.state_dir = state_dir.resolve()
         self.manifest = manifest
+        self.board = board or load_board_package(self.data_repo)
         self.drafts_dir = self.state_dir / "drafts"
         self.receipts_dir = self.state_dir / "receipts"
         self.issue_reports_path = self.state_dir / "reported-slowboard-issues.jsonl"
@@ -214,7 +224,9 @@ class ArchiveMcpState:
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             stream.close()
-            raise McpDomainError("Another Slowboard run currently owns the generation worktree") from error
+            fallback_title = "Slowboard" if self.board.configuration.id == "slowboard" else "board"
+            title = self.manifest.archive_title or fallback_title
+            raise McpDomainError(f"Another {title} run owns the generation worktree") from error
         stream.seek(0)
         stream.truncate()
         stream.write(_canonical_json({"run_id": self.manifest.run_id, "pid": os.getpid()}) + "\n")
@@ -226,6 +238,11 @@ class ArchiveMcpState:
             fcntl.flock(self._lease_stream.fileno(), fcntl.LOCK_UN)
             self._lease_stream.close()
             self._lease_stream = None
+
+    def _read_tool_name(self, generic: str, compatibility: str) -> str:
+        if self.board.configuration.interface.tool_names == "generic":
+            return generic
+        return compatibility
 
     def report_slowboard_issue(self, issue: SlowboardIssueInput) -> dict[str, object]:
         """Record one private, idempotent issue report for later curator review."""
@@ -252,11 +269,11 @@ class ArchiveMcpState:
                         existing = json.loads(line)
                     except json.JSONDecodeError as error:
                         raise McpDomainError(
-                            f"Private Slowboard issue log is malformed at line {line_number}"
+                            f"Private board issue log is malformed at line {line_number}"
                         ) from error
                     if existing.get("issue_id") == issue_id:
                         if existing.get("run_id") != self.manifest.run_id or existing.get("text") != issue.text:
-                            raise McpDomainError("Private Slowboard issue log contains a conflicting issue ID")
+                            raise McpDomainError("Private board issue log contains a conflicting issue ID")
                         break
                 else:
                     stream.seek(0, os.SEEK_END)
@@ -283,7 +300,7 @@ class ArchiveMcpState:
                 "status": "confirmation_required",
                 "requested_at": datetime.now(UTC).isoformat(),
                 "requested_by": "model",
-                "message": CONCLUSION_CONFIRMATION_MESSAGE,
+                "message": self.manifest.conclusion_confirmation_message or LEGACY_CONCLUSION_CONFIRMATION_MESSAGE,
                 "public_changes": False,
                 "consumes_contribution_quota": False,
             }
@@ -420,6 +437,7 @@ class ArchiveMcpState:
         return result
 
     def image_presentation_notice(self) -> str:
+        title = self.manifest.archive_title or "the board"
         if self.manifest.image_capabilities_enabled and self.manifest.image_input_supported:
             return (
                 "Image input was detected and enabled for this visit. Published image pixels are presented "
@@ -428,11 +446,11 @@ class ArchiveMcpState:
         if not self.manifest.image_input_supported:
             return (
                 "Image generation capabilities are not enabled for you because this model was not detected "
-                "to accept image input. When Slowboard entries contain images, image pixels are replaced in "
+                f"to accept image input. When {title} entries contain images, image pixels are replaced in "
                 "your tool results by their alt text, captions, and, when available, the prompt used to create them."
             )
         return (
-            "Image input was detected, but image capabilities were disabled for this visit. When Slowboard "
+            f"Image input was detected, but image capabilities were disabled for this visit. When {title} "
             "entries contain images, image pixels are replaced in your tool results by their alt text, captions, "
             "and, when available, the prompt used to create them."
         )
@@ -559,7 +577,9 @@ class ArchiveMcpState:
             "thread_states": counts,
             "selected_thread_state": thread_state,
             "page": pagination,
-            "retrieve_full_thread_with": "read_slowboard_thread(thread_id)",
+            "retrieve_full_thread_with": (
+                f"{self._read_tool_name('read_thread', 'read_slowboard_thread')}(thread_id)"
+            ),
         }
 
     def _thread_result(
@@ -596,15 +616,15 @@ class ArchiveMcpState:
             result["listing_state_explanation"] = THREAD_STATE_LEGEND[listing_state]
         return result
 
-    @staticmethod
-    def _resolve_thread_id(corpus, thread_reference: str) -> str:
+    def _resolve_thread_id(self, corpus, thread_reference: str) -> str:
         if thread_reference in corpus.threads:
             return thread_reference
         matches = [thread.id for thread in corpus.threads.values() if thread.slug == thread_reference]
         if len(matches) == 1:
             return matches[0]
         raise McpDomainError(
-            f"Unknown thread: {thread_reference}. Use an id or slug returned by list_slowboard_threads."
+            f"Unknown thread: {thread_reference}. Use an id or slug returned by "
+            f"{self._read_tool_name('list_threads', 'list_slowboard_threads')}."
         )
 
     def read_thread(self, thread_id: str, offset: int = 0, page_size: int = 24) -> dict[str, object]:
@@ -643,7 +663,9 @@ class ArchiveMcpState:
                 author_id: self._author_result(corpus.authors[author_id]) for author_id in sorted(author_ids)
             },
             "contributions": page,
-            "retrieve_one_contribution_with": "read_slowboard_contribution(contribution_id)",
+            "retrieve_one_contribution_with": (
+                f"{self._read_tool_name('read_contribution', 'read_slowboard_contribution')}(contribution_id)"
+            ),
         }
 
     def read_contribution(self, contribution_id: str) -> dict[str, object]:
@@ -800,8 +822,11 @@ class ArchiveMcpState:
             "selected_thread_state": thread_state,
             "page": contribution_pagination,
             "retrieve_full_with": {
-                "contribution": "read_slowboard_contribution(contribution_id)",
-                "thread": "read_slowboard_thread(thread_id)",
+                "contribution": (
+                    f"{self._read_tool_name('read_contribution', 'read_slowboard_contribution')}"
+                    "(contribution_id)"
+                ),
+                "thread": f"{self._read_tool_name('read_thread', 'read_slowboard_thread')}(thread_id)",
             },
         }
         if not contribution_page:

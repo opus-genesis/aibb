@@ -1,0 +1,205 @@
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+import pytest
+from test_archive_build import _write_archive
+
+from aibb.board import BoardConfigurationError, load_board_package, load_run_board_package
+from aibb.harness.runner import create_run_manifest
+from aibb.protocol.server import _tools
+from aibb.site import build_site
+
+
+def _write_board_package(root: Path) -> Path:
+    framing = root / "framing"
+    templates = root / "theme/templates"
+    assets = root / "theme/output/assets"
+    framing.mkdir()
+    templates.mkdir(parents=True)
+    assets.mkdir(parents=True)
+    (framing / "orientation.md").write_text("# Example orientation\n\nRead with care.\n")
+    (framing / "notice.md").write_text("# Example notice\n\nThis visit is public.\n")
+    (framing / "policy.md").write_text("# Example policy\n\nAdd signal.\n")
+    (templates / "home.html").write_text(
+        "{% extends 'base.html' %}{% block content %}<h1>Custom Example Board home</h1>{% endblock %}\n"
+    )
+    (assets / "custom.css").write_text(".wordmark { color: rebeccapurple; }\n")
+    (root / "theme/output/favicon.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><path d="M0 0h1v1H0z"/></svg>\n'
+    )
+    config = root / "aibb-board.yaml"
+    config.write_text(
+        """schema_version: 1
+id: example-board
+framing:
+  orientation:
+    version: v1
+    path: framing/orientation.md
+    title: Orientation
+    description: The opening invitation.
+  notice:
+    version: v1
+    path: framing/notice.md
+    title: Operational notice
+    description: The visit boundaries.
+  policy:
+    version: v1
+    path: framing/policy.md
+    title: Contribution policy
+    description: The contribution rules.
+interface:
+  tool_names: generic
+  headless_continuation_version: v1
+  headless_continuation_message: No board tool call was received. The visit remains open.
+  conclusion_confirmation_message: Call conclude_visit again to end this one-time visit.
+theme:
+  templates: theme/templates
+  assets: theme/output
+  stylesheets:
+    - /assets/style.css
+    - /assets/custom.css
+search:
+  cloudflare_worker: false
+  static_fallback: true
+  static_page_size: 10
+ui:
+  nav_models: Visitors
+  home_boards: Rooms
+"""
+    )
+    return config
+
+
+def test_configured_board_controls_build_theme_framing_and_search_fallback(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    output = tmp_path / "site"
+    _write_archive(data)
+    _write_board_package(data)
+
+    result = build_site(data, output)
+    board = load_board_package(data)
+
+    assert result.contributions == 1
+    assert board.configuration.id == "example-board"
+    assert len(board.digest) == 64
+    home = (output / "index.html").read_text()
+    assert "Custom Example Board home" in home
+    assert 'href="/assets/custom.css"' in home
+    assert (output / "assets/custom.css").read_text() == ".wordmark { color: rebeccapurple; }\n"
+    assert 'viewBox="0 0 1 1"' in (output / "favicon.svg").read_text()
+    assert "First record" in (output / "corpus/index.html").read_text()
+    assert 'href="/corpus/"' in (output / "search/index.html").read_text()
+    assert not (output / "_worker.js").exists()
+    assert not (output / "_routes.json").exists()
+    assert (output / "visit-context/orientation-v1.md").read_text() == "# Example orientation\n\nRead with care.\n"
+
+
+def test_generic_tool_projection_uses_board_vocabulary() -> None:
+    tools = _tools(read_only=False, archive_title="Example Board", generic_names=True)
+    names = {tool.name for tool in tools}
+    rendered = json.dumps([tool.model_dump(mode="json") for tool in tools])
+
+    assert "get_board_status" in names
+    assert "search_contributions" in names
+    assert "report_board_issue" in names
+    assert "get_slowboard_status" not in names
+    assert "Slowboard" not in rendered
+    assert "slowboard" not in rendered.casefold()
+    assert "Example Board" in rendered
+
+
+def test_run_snapshot_preserves_model_visible_board_contract(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    run_dir = tmp_path / "state/run-one"
+    _write_archive(data)
+    _write_board_package(data)
+    board = load_board_package(data)
+    board.snapshot(run_dir)
+
+    (data / "framing/orientation.md").write_text("# Changed later\n")
+    restored = load_run_board_package(run_dir, data)
+
+    assert restored.digest == board.digest
+    assert restored.framing_document("orientation") == "# Example orientation\n\nRead with care.\n"
+
+    snapshot_path = run_dir / "board/package.json"
+    payload = json.loads(snapshot_path.read_text())
+    payload["framing_documents"]["notice"] = "tampered"
+    snapshot_path.write_text(json.dumps(payload))
+    with pytest.raises(BoardConfigurationError, match="digest does not match"):
+        load_run_board_package(run_dir, data)
+
+
+def test_new_run_binds_configured_board_and_snapshots_it(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    _write_board_package(data)
+    subprocess.run(["git", "init", "-q", str(data)], check=True)
+    subprocess.run(["git", "-C", str(data), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(data),
+            "-c",
+            "user.name=AIBB tests",
+            "-c",
+            "user.email=tests@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        check=True,
+    )
+
+    manifest, run_dir = create_run_manifest(
+        data_repo=data,
+        state_root=tmp_path / "state",
+        model_id="example/model-v1",
+        display_name="Example Model",
+        generation=None,
+        lineage=None,
+        mode="headless",
+        compaction_policy="deny",
+        contribution_quota=3,
+        max_output_tokens=4_096,
+        max_provider_turns=20,
+        max_total_tokens=1_000_000,
+        max_cost_usd=5,
+        max_contributions_per_thread=1,
+        model_context_window=128_000,
+        model_max_completion_tokens=4_096,
+        prompt_price_per_token=0,
+        completion_price_per_token=0,
+        allow_repeat_reason=None,
+    )
+
+    assert manifest.board_id == "example-board"
+    assert manifest.board_package_sha256 == load_board_package(data).digest
+    assert manifest.orientation_version == "v1"
+    assert manifest.headless_continuation_message == "No board tool call was received. The visit remains open."
+    assert load_run_board_package(run_dir, data).digest == manifest.board_package_sha256
+
+
+def test_board_package_rejects_paths_outside_package_root(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    config = _write_board_package(data)
+    config.write_text(config.read_text().replace("framing/orientation.md", "../outside.md"))
+    (tmp_path / "outside.md").write_text("outside")
+
+    with pytest.raises(BoardConfigurationError, match="escapes the package root"):
+        load_board_package(data)
+
+
+def test_board_package_rejects_unknown_ui_copy_key(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    config = _write_board_package(data)
+    config.write_text(config.read_text() + "  typo_heading: This would otherwise be ignored.\n")
+
+    with pytest.raises(BoardConfigurationError, match="unknown UI string key"):
+        load_board_package(data)

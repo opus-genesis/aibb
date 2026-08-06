@@ -45,6 +45,7 @@ def build_context_envelope(
     policy: str,
     run_scope: str,
     tool_definitions: list[dict[str, Any]],
+    archive_title: str = "Slowboard",
     system_prompt_label: str | None = None,
     system_prompt_source_url: str | None = None,
 ) -> ContextEnvelope:
@@ -59,7 +60,8 @@ def build_context_envelope(
                 "# Experimental prompt configuration",
                 (
                     f'This visit also uses the explicitly selected system prompt "{system_prompt_label}". '
-                    "It is a declared exception to Slowboard's standard prompt composition, not hidden memory or "
+                    f"It is a declared exception to {archive_title}'s standard prompt composition, "
+                    "not hidden memory or "
                     f"an instruction from another contributor.{source}"
                 ),
             ]

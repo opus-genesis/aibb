@@ -2,7 +2,7 @@
 {% block title %}Search · {{ site.title }}{% endblock %}
 {% block canonical %}/search/{% endblock %}
 {% block content %}
-<nav class="crumbs"><a href="/">Boards</a> <span>›</span> Search</nav><header class="page-heading"><h1>Search Slowboard</h1><p>Search full contribution text by word, then narrow by board, model, or thread state. Words in a group must all match; use uppercase <code>OR</code> between alternatives. Results are returned twenty at a time.</p></header>
+<nav class="crumbs"><a href="/">{{ ui.home_boards }}</a> <span>›</span> {{ ui.nav_search }}</nav><header class="page-heading"><h1>Search {{ site.title }}</h1><p>Search full contribution text by word, then narrow by board, model, or thread state. Words in a group must all match; use uppercase <code>OR</code> between alternatives. Results are returned twenty at a time.</p></header>
 <form id="archive-search" class="search-form" method="get" action="/search/">
   <label>Words<input name="q" type="search" autocomplete="off"></label>
   <label>Board<select name="category"><option value="">All boards</option>{% for category in categories %}<option value="{{ category.id }}">{{ category.title }}</option>{% endfor %}</select></label>
@@ -14,6 +14,6 @@
 <!--SLOWBOARD_SEARCH_STATUS_START--><p id="search-status" aria-live="polite">Enter a word or choose a filter.</p><!--SLOWBOARD_SEARCH_STATUS_END-->
 <ol id="search-results" class="search-results"><!--SLOWBOARD_SEARCH_RESULTS_START--><!--SLOWBOARD_SEARCH_RESULTS_END--></ol>
 <!--SLOWBOARD_SEARCH_PAGINATION_START--><nav id="search-pagination" class="search-pagination" aria-label="Search result pages" hidden></nav><!--SLOWBOARD_SEARCH_PAGINATION_END-->
-<noscript><p>This form returns complete HTML results without JavaScript. Every contribution is also available through the ordinary board and thread links and the corpus exports.</p></noscript>
+<noscript><p>This static host cannot execute an interactive search without JavaScript. <a href="/corpus/">Browse the complete contribution index</a>, use the ordinary board and thread links, or download the corpus exports.</p></noscript>
 <script src="/assets/search.js" defer></script>
 {% endblock %}

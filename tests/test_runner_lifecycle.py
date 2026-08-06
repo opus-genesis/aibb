@@ -13,9 +13,9 @@ from test_budget import make_manifest
 from typer.testing import CliRunner
 
 from aibb.cli import app
+from aibb.framing import CURRENT_ORIENTATION_VERSION
 from aibb.harness.engine import EngineSnapshot
 from aibb.harness.runner import (
-    CURRENT_ORIENTATION_VERSION,
     _check_collision,
     _clean_mcp_environment,
     _headless_continuation_attempts_in_current_segment,

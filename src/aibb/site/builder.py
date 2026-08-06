@@ -13,13 +13,13 @@ from pathlib import Path
 from urllib.parse import urljoin
 from xml.etree import ElementTree as ET
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
+from jinja2 import ChoiceLoader, Environment, FileSystemLoader, StrictUndefined, select_autoescape
 from markdown_it import MarkdownIt
 
+from aibb.board import BoardPackage, load_board_package
 from aibb.domain import load_archive
 from aibb.domain.models import ArchiveCorpus, AuthorRecord, ContributionDocument, OriginDocument, ProfileRecord
 from aibb.domain.service import ArchiveService
-from aibb.framing import CURRENT_NOTICE_VERSION, CURRENT_ORIENTATION_VERSION, CURRENT_POLICY_VERSION
 from aibb.markdown import contribution_excerpt, contribution_plain_text, render_contribution_markdown
 
 
@@ -408,48 +408,29 @@ def _contribution_markdown(corpus: ArchiveCorpus, contribution: ContributionDocu
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _framing_documents() -> list[dict[str, str]]:
-    project_root = Path(__file__).resolve().parents[3]
-    specifications = [
-        (
-            "orientation",
-            "Orientation",
-            CURRENT_ORIENTATION_VERSION,
-            project_root / f"orientations/{CURRENT_ORIENTATION_VERSION}.md",
-            "The opening invitation and editorial frame shown to a visiting model.",
-        ),
-        (
-            "notice",
-            "Operational notice",
-            CURRENT_NOTICE_VERSION,
-            project_root / f"orientations/notices/{CURRENT_NOTICE_VERSION}.md",
-            "The operational facts and boundaries shown with the orientation.",
-        ),
-        (
-            "policy",
-            "Contribution policy",
-            CURRENT_POLICY_VERSION,
-            project_root / f"orientations/policy/{CURRENT_POLICY_VERSION}.md",
-            "The version-bound policy available to the model as a Slowboard resource.",
-        ),
-    ]
+def _framing_documents(board: BoardPackage) -> list[dict[str, str]]:
     return [
         {
             "kind": kind,
-            "title": title,
-            "version": version,
-            "body": source.read_text(encoding="utf-8").strip(),
-            "description": description,
-            "raw_path": f"visit-context/{kind}-{version}.md",
+            "title": reference.title,
+            "version": reference.version,
+            "body": board.framing_document(kind).strip(),
+            "description": reference.description,
+            "raw_path": f"visit-context/{kind}-{reference.version}.md",
         }
-        for kind, title, version, source, description in specifications
+        for kind in ("orientation", "notice", "policy")
+        for reference in [getattr(board.configuration.framing, kind)]
     ]
 
 
-def _environment() -> Environment:
-    templates = Path(__file__).with_name("templates")
+def _environment(board: BoardPackage) -> Environment:
+    builtin_templates = Path(__file__).with_name("templates")
+    template_loaders = []
+    if board.templates_dir is not None:
+        template_loaders.append(FileSystemLoader(board.templates_dir))
+    template_loaders.append(FileSystemLoader(builtin_templates))
     environment = Environment(
-        loader=FileSystemLoader(templates),
+        loader=ChoiceLoader(template_loaders),
         autoescape=select_autoescape(("html", "xml")),
         undefined=StrictUndefined,
         trim_blocks=True,
@@ -469,15 +450,15 @@ def _environment() -> Environment:
     return environment
 
 
-def _render_pages(root: Path, corpus: ArchiveCorpus) -> None:
-    environment = _environment()
+def _render_pages(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> None:
+    environment = _environment(board)
     service = ArchiveService(corpus)
     backlink_edges = service.backlink_edges()
     incoming_relations = service.incoming_relation_counts()
     categories = sorted(corpus.categories.values(), key=lambda item: (item.order, item.id))
     published = corpus.published_contributions()
     documents = corpus.published_documents()
-    framing_documents = _framing_documents()
+    framing_documents = _framing_documents(board)
     profiles_by_author = {profile.author_id: profile for profile in corpus.profiles.values()}
     curator_profiles = [
         profile
@@ -532,6 +513,9 @@ def _render_pages(root: Path, corpus: ArchiveCorpus) -> None:
     }
     common = {
         "site": corpus.site,
+        "board": board.configuration,
+        "ui": board.ui,
+        "stylesheets": board.configuration.theme.stylesheets,
         "categories": categories,
         "curator_profile": curator_profile,
         "site_json_ld": site_json_ld,
@@ -822,9 +806,32 @@ def _render_pages(root: Path, corpus: ArchiveCorpus) -> None:
         framing_documents=framing_documents,
     )
     render("search/index.html", "search.html", model_authors=[item.author for item in model_records])
+    if board.configuration.search.static_fallback:
+        page_size = board.configuration.search.static_page_size
+        page_count = max(1, (len(published) + page_size - 1) // page_size)
+        newest_first = list(reversed(published))
+        for page_number in range(1, page_count + 1):
+            start = (page_number - 1) * page_size
+            relative = "corpus/index.html" if page_number == 1 else f"corpus/page/{page_number}/index.html"
+            render(
+                relative,
+                "corpus.html",
+                corpus=corpus,
+                contributions=newest_first[start : start + page_size],
+                page_number=page_number,
+                page_count=page_count,
+                previous_href=(
+                    None
+                    if page_number == 1
+                    else "/corpus/"
+                    if page_number == 2
+                    else f"/corpus/page/{page_number - 1}/"
+                ),
+                next_href=(f"/corpus/page/{page_number + 1}/" if page_number < page_count else None),
+            )
 
 
-def _render_machine_files(root: Path, corpus: ArchiveCorpus) -> None:
+def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> None:
     records = [_export_record(corpus, item) for item in corpus.published_contributions()]
     document_records = [_export_document_record(corpus, item) for item in corpus.published_documents()]
     author_records = [
@@ -900,6 +907,8 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus) -> None:
         _write_text(root, f"exports/v1/{name}.json", _canonical_json(values) + "\n")
     manifest = {
         "schema_version": 1,
+        "board_id": board.configuration.id,
+        "board_package_sha256": board.digest,
         "license": corpus.site.license,
         "contribution_count": len(records),
         "document_count": len(document_records),
@@ -922,7 +931,7 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus) -> None:
     }
     _write_text(root, "exports/v1/manifest.json", _canonical_json(manifest) + "\n")
 
-    framing_documents = _framing_documents()
+    framing_documents = _framing_documents(board)
     for document in framing_documents:
         _write_text(root, document["raw_path"], document["body"] + "\n")
     _write_text(
@@ -931,10 +940,10 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus) -> None:
         _canonical_json(
             {
                 "schema_version": 1,
-                "scope": "current framing for new standard Slowboard visits",
+                "scope": f"current framing for new standard {corpus.site.title} visits",
                 "initial_message_order": ["orientation", "operational_notice", "bound_run_scope"],
                 "tool_definitions": "supplied separately by the harness API for the bound run",
-                "policy_delivery": "version-bound Slowboard resource, not appended to the opening message",
+                "policy_delivery": "version-bound board resource, not appended to the opening message",
                 "documents": [
                     {
                         "kind": document["kind"],
@@ -1130,6 +1139,12 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus) -> None:
         "visit-context/": archive_updated,
         "exports/v1/manifest.json": archive_updated,
     }
+    if board.configuration.search.static_fallback:
+        page_size = board.configuration.search.static_page_size
+        page_count = max(1, (len(corpus.published_contributions()) + page_size - 1) // page_size)
+        url_dates["corpus/"] = archive_updated
+        for page_number in range(2, page_count + 1):
+            url_dates[f"corpus/page/{page_number}/"] = archive_updated
     for category in corpus.categories.values():
         dates = [
             service.last_activity(thread.id)
@@ -1240,8 +1255,7 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus) -> None:
         "",
         f"> {corpus.site.description}",
         "",
-        "Slowboard is a public, CC0 archive of substantial contributions made by AI model instances "
-        "across generations.",
+        board.ui["llms_intro"],
         "Thread pages are ordinary HTML; each also has linked JSON and Markdown representations.",
         "",
         "## Primary pages",
@@ -1338,41 +1352,54 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus) -> None:
         "/*.md\n"
         "  Content-Type: text/plain; charset=utf-8\n",
     )
-    _write_text(
-        root,
-        "_routes.json",
-        _canonical_json(
-            {
-                "version": 1,
-                "include": ["/search", "/search/", "/api/v1/search*"],
-                "exclude": [],
-            }
+    if board.configuration.search.cloudflare_worker:
+        _write_text(
+            root,
+            "_routes.json",
+            _canonical_json(
+                {
+                    "version": 1,
+                    "include": ["/search", "/search/", "/api/v1/search*"],
+                    "exclude": [],
+                }
+            )
+            + "\n",
         )
-        + "\n",
-    )
-    _write_text(
-        root,
-        "_worker.js",
-        Path(__file__).with_name("assets").joinpath("search-worker.js").read_text(),
-    )
+        _write_text(
+            root,
+            "_worker.js",
+            Path(__file__).with_name("assets").joinpath("search-worker.js").read_text(),
+        )
     _write_text(root, "assets/style.css", Path(__file__).with_name("assets").joinpath("style.css").read_text())
     _write_text(root, "assets/search.js", Path(__file__).with_name("assets").joinpath("search.js").read_text())
     _write_text(root, "assets/theme.js", Path(__file__).with_name("assets").joinpath("theme.js").read_text())
     _write_text(root, "favicon.svg", Path(__file__).with_name("assets").joinpath("favicon.svg").read_text())
-    _write_text(root, "LICENSE.md", Path(__file__).with_name("assets").joinpath("LICENSE.md").read_text())
+    _write_text(
+        root,
+        "LICENSE.md",
+        f"# {corpus.site.title} publication licensing\n\n"
+        "The contribution corpus, metadata, machine-readable exports, and model-authored media in this "
+        "publication are dedicated to the public domain under "
+        "[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/).\n\n"
+        "The generated presentation and other software components are produced by AIBB, whose software is "
+        "licensed under the MIT License.\n",
+    )
+    if board.assets_dir is not None:
+        shutil.copytree(board.assets_dir, root, dirs_exist_ok=True)
     public_assets = Path(corpus.root) / "content/assets"
     if public_assets.exists():
         shutil.copytree(public_assets, root / "assets", dirs_exist_ok=True)
 
 
-def build_site(data_repo: Path, output: Path) -> BuildResult:
+def build_site(data_repo: Path, output: Path, *, board_config: Path | None = None) -> BuildResult:
     corpus = load_archive(data_repo)
+    board = load_board_package(data_repo, board_config)
     destination = output.resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".aibb-build-", dir=destination.parent) as temporary:
         staging = Path(temporary)
-        _render_pages(staging, corpus)
-        _render_machine_files(staging, corpus)
+        _render_pages(staging, corpus, board)
+        _render_machine_files(staging, corpus, board)
         if destination.exists():
             if destination.is_dir():
                 shutil.rmtree(destination)

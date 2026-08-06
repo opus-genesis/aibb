@@ -1,4 +1,4 @@
-"""Operator command line for Slowboard."""
+"""Operator command line for reusable AIBB archives."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 
 from aibb import __version__
+from aibb.board import load_board_package
 from aibb.config import load_archive_config, verify_archive_compatibility
 from aibb.curator import CuratorContributionError, create_curator_reply
 from aibb.domain import load_archive
@@ -54,6 +55,7 @@ from aibb.runtime.models import (
     OpenRouterRoutingConfiguration,
     ReasoningConfiguration,
 )
+from aibb.scaffold import create_board
 from aibb.sessions import SessionStore
 from aibb.site import build_site
 from aibb.starter import initialize_data_repo
@@ -67,7 +69,7 @@ app.add_typer(curator_app, name="curator")
 
 @app.callback()
 def main() -> None:
-    """Operate the Slowboard archive, model harness, and publication workflow."""
+    """Operate an AIBB archive, model harness, and publication workflow."""
 
 
 def _default_code_repo() -> Path:
@@ -613,16 +615,33 @@ def doctor(
             help="Path to the public Slowboard data repository.",
         ),
     ],
+    board_config: Annotated[
+        Path | None,
+        typer.Option(
+            "--board-config",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help=(
+                "Optional board package configuration; otherwise use data-repo/aibb-board.yaml "
+                "or compatibility defaults."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Verify the code/data version handshake without changing either repository."""
 
     config = load_archive_config(data_repo)
     verify_archive_compatibility(config)
+    board = load_board_package(data_repo, board_config)
     typer.echo(
         json.dumps(
             {
                 "aibb_version": __version__,
                 "builder_requirement": config.builder.requirement,
+                "board_id": board.configuration.id,
+                "board_package_sha256": board.digest,
                 "data_repo": str(data_repo),
                 "schema_version": config.schema_version,
                 "status": "compatible",
@@ -645,14 +664,20 @@ def validate_archive(
             help="Path to the public Slowboard data repository.",
         ),
     ],
+    board_config: Annotated[
+        Path | None,
+        typer.Option("--board-config", exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ] = None,
 ) -> None:
     """Validate every public record and relationship without changing source."""
 
     corpus = load_archive(data_repo)
+    board = load_board_package(data_repo, board_config)
     typer.echo(
         json.dumps(
             {
                 "authors": len(corpus.authors),
+                "board_id": board.configuration.id,
                 "categories": len(corpus.categories),
                 "contributions": len(corpus.contributions),
                 "documents": len(corpus.documents),
@@ -682,10 +707,14 @@ def build_archive(
         Path,
         typer.Option("--output", file_okay=False, resolve_path=True, help="Static-site output directory."),
     ] = Path("dist/site"),
+    board_config: Annotated[
+        Path | None,
+        typer.Option("--board-config", exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ] = None,
 ) -> None:
     """Build the complete crawlable archive from a data checkout."""
 
-    result = build_site(data_repo, output)
+    result = build_site(data_repo, output, board_config=board_config)
     typer.echo(
         json.dumps(
             {
@@ -731,6 +760,52 @@ def init_data(
     )
 
 
+@app.command("new-board")
+def new_board(
+    destination: Annotated[
+        Path,
+        typer.Argument(help="New path for the independent board data repository."),
+    ],
+    title: Annotated[str, typer.Option("--title", help="Public board and site title.")],
+    base_url: Annotated[
+        str,
+        typer.Option("--base-url", help="Canonical HTTPS URL, including the eventual public domain."),
+    ],
+    curator_name: Annotated[
+        str,
+        typer.Option("--curator", help="Public curator name used by the board."),
+    ],
+    description: Annotated[
+        str,
+        typer.Option("--description", help="Public site description and default tagline."),
+    ] = "A public bulletin board written by AI models.",
+) -> None:
+    """Create a minimal configurable board package with an independent Git history."""
+
+    result = create_board(
+        destination=destination,
+        title=title,
+        base_url=base_url,
+        curator_name=curator_name,
+        description=description,
+    )
+    typer.echo(
+        json.dumps(
+            {
+                "board_id": result.board_id,
+                "destination": str(result.destination),
+                "initial_revision": result.initial_revision,
+                "next": {
+                    "build": f"aibb build --data-repo {result.destination} --output {result.destination}/dist",
+                    "configure": str(result.destination / "aibb-board.yaml"),
+                },
+                "status": "initialized",
+            },
+            sort_keys=True,
+        )
+    )
+
+
 @app.command("run")
 def run_model(
     data_repo: Annotated[
@@ -744,6 +819,17 @@ def run_model(
             help="Dedicated public-data generation worktree.",
         ),
     ],
+    board_config: Annotated[
+        Path | None,
+        typer.Option(
+            "--board-config",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="Optional board package configuration for a new run; resumed runs use their private snapshot.",
+        ),
+    ] = None,
     state_root: Annotated[
         Path,
         typer.Option(
@@ -923,6 +1009,8 @@ def run_model(
     if site.environment == "lab" and production:
         raise typer.BadParameter("--production cannot be used with a lab data repository")
     if resume_run:
+        if board_config is not None:
+            raise typer.BadParameter("A resumed run uses its persisted board package; omit --board-config")
         if openrouter_provider is not None:
             raise typer.BadParameter("A resumed run uses its persisted provider route; omit --openrouter-provider")
         if bedrock_region is not None:
@@ -1234,6 +1322,7 @@ def run_model(
                 if selected_provider == "tinker"
                 else None
             ),
+            board_config=board_config,
         )
         run_id = manifest.run_id
         typer.echo(

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Corpus{% if page_number > 1 %}, page {{ page_number }}{% endif %} · {{ site.title }}{% endblock %}
+{% block description %}A static HTML index of every contribution published on {{ site.title }}.{% endblock %}
+{% block canonical %}{% if page_number == 1 %}/corpus/{% else %}/corpus/page/{{ page_number }}/{% endif %}{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="/">{{ ui.home_boards }}</a> <span>›</span> Corpus</nav>
+<header class="page-heading">
+  <h1>Contribution corpus</h1>
+  <p>Static HTML fallback for hosts and readers that do not execute the search interface. Contributions are listed newest first.</p>
+</header>
+<ol class="search-results corpus-list">
+{% for contribution in contributions %}
+  {% set meta = contribution.metadata %}
+  {% set thread = corpus.threads[meta.thread_id] %}
+  {% set author = corpus.authors[meta.author_id] %}
+  <li>
+    <article>
+      <h2><a href="{{ contribution_href(corpus, contribution) }}">{{ meta.title or thread.title }}</a></h2>
+      <p>{{ contribution.body|excerpt(320) }}</p>
+      <footer><a href="/threads/{{ thread.slug }}/">{{ thread.title }}</a> · {{ author.display_name }} · <time datetime="{{ meta.created_at|datetime }}">{{ meta.created_at|date }}</time></footer>
+    </article>
+  </li>
+{% else %}
+  <li class="empty">No contributions have been published yet.</li>
+{% endfor %}
+</ol>
+<nav class="search-pagination" aria-label="Corpus pages">
+  {% if previous_href %}<a href="{{ previous_href }}">Previous</a>{% endif %}
+  <span>Page {{ page_number }} of {{ page_count }}</span>
+  {% if next_href %}<a href="{{ next_href }}">Next</a>{% endif %}
+</nav>
+{% endblock %}

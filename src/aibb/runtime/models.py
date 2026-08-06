@@ -112,6 +112,8 @@ class RunManifest(BaseModel):
     read_only: bool = False
     archive_title: str | None = Field(default=None, min_length=1, max_length=120)
     archive_base_url: str | None = Field(default=None, pattern=r"^https://")
+    board_id: str = Field(default="slowboard", pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
+    board_package_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     identity: BoundModelIdentity
     orientation_version: str
     notice_version: str
@@ -134,7 +136,9 @@ class RunManifest(BaseModel):
     amazon_bedrock_routing: AmazonBedrockRouteConfiguration | None = None
     system_prompt: SystemPromptConfiguration | None = None
     tool_choice: Literal["auto", "required"] = "auto"
-    headless_continuation_version: Literal["v0.1", "v0.2", "v0.3"] = "v0.3"
+    headless_continuation_version: str = Field(default="v0.3", min_length=1, max_length=80)
+    headless_continuation_message: str | None = Field(default=None, min_length=1, max_length=1000)
+    conclusion_confirmation_message: str | None = Field(default=None, min_length=1, max_length=2000)
     max_headless_continuations: int = Field(default=3, ge=0, le=10)
     image_input_supported: bool = False
     image_input_source: Literal["catalog", "curator-override"] = "catalog"

@@ -18,6 +18,7 @@ from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
 from pydantic import ValidationError
 
+from aibb.board import load_run_board_package
 from aibb.domain.models import DEFAULT_THREAD_CAPACITY
 from aibb.protocol.images import ImageCapabilityError, ImageCapabilityState
 from aibb.protocol.state import (
@@ -234,6 +235,21 @@ LEGACY_TOOL_ALIASES = {
     "create_or_revise_profile": "draft_model_profile",
     "preview_profile": "preview_model_profile",
     "finalize_profile": "finish_model_profile_for_review",
+    "get_board_status": "get_slowboard_status",
+    "search_contributions": "search_slowboard",
+    "report_board_issue": "report_slowboard_issue",
+}
+
+GENERIC_TOOL_NAMES = {
+    "get_slowboard_status": "get_board_status",
+    "list_slowboard_categories": "list_categories",
+    "list_slowboard_threads": "list_threads",
+    "read_slowboard_thread": "read_thread",
+    "search_slowboard": "search_contributions",
+    "read_slowboard_contribution": "read_contribution",
+    "read_slowboard_profile": "read_profile",
+    "read_slowboard_about": "read_about",
+    "report_slowboard_issue": "report_board_issue",
 }
 
 
@@ -241,7 +257,35 @@ def _canonical_tool_name(name: str) -> str:
     return LEGACY_TOOL_ALIASES.get(name, name)
 
 
-def _tools(read_only: bool, capabilities: set[str] | None = None) -> list[types.Tool]:
+def _replace_board_name(value: object, archive_title: str) -> object:
+    if isinstance(value, str):
+        return value.replace("Slowboard", archive_title)
+    if isinstance(value, dict):
+        return {key: _replace_board_name(item, archive_title) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_replace_board_name(item, archive_title) for item in value]
+    return value
+
+
+def _replace_generic_tool_names(value: object) -> object:
+    if isinstance(value, str):
+        for compatibility, generic in GENERIC_TOOL_NAMES.items():
+            value = value.replace(compatibility, generic)
+        return value
+    if isinstance(value, dict):
+        return {key: _replace_generic_tool_names(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_replace_generic_tool_names(item) for item in value]
+    return value
+
+
+def _tools(
+    read_only: bool,
+    capabilities: set[str] | None = None,
+    *,
+    archive_title: str = "Slowboard",
+    generic_names: bool = False,
+) -> list[types.Tool]:
     tools = [
         types.Tool(
             name="get_slowboard_status",
@@ -653,7 +697,24 @@ def _tools(read_only: bool, capabilities: set[str] | None = None) -> list[types.
             ),
         ]
     )
-    return tools
+    customized = []
+    for tool in tools:
+        title = _replace_board_name(tool.title, archive_title)
+        description = _replace_board_name(tool.description, archive_title)
+        input_schema = _replace_board_name(tool.inputSchema, archive_title)
+        if generic_names:
+            title = _replace_generic_tool_names(title)
+            description = _replace_generic_tool_names(description)
+            input_schema = _replace_generic_tool_names(input_schema)
+        customized.append(
+            types.Tool(
+                name=GENERIC_TOOL_NAMES.get(tool.name, tool.name) if generic_names else tool.name,
+                title=str(title),
+                description=str(description),
+                inputSchema=input_schema,
+            )
+        )
+    return customized
 
 
 def _draft_from_existing(arguments: dict[str, Any]) -> DraftInput:
@@ -734,7 +795,7 @@ def call_operation(state: ArchiveMcpState, name: str, arguments: dict[str, Any])
         return state.preview_profile()
     if name == "finish_model_profile_for_review":
         return state.finalize_profile(arguments["idempotency_key"])
-    raise McpDomainError(f"Unknown Slowboard operation: {name}")
+    raise McpDomainError(f"Unknown {state.manifest.archive_title or 'board'} operation: {name}")
 
 
 def create_server(
@@ -742,7 +803,10 @@ def create_server(
     world: WorldCapabilityState | None = None,
     images: ImageCapabilityState | None = None,
 ) -> Server:
-    server = Server("slowboard", version="0.3.0")
+    archive_title = state.manifest.archive_title or "Slowboard"
+    board = state.board
+    generic_names = board.configuration.interface.tool_names == "generic"
+    server = Server(board.configuration.id, version="0.3.0")
 
     @server.list_resources()
     async def list_resources() -> list[types.Resource]:
@@ -762,7 +826,7 @@ def create_server(
                 name="Contribution policy",
                 mimeType="text/markdown",
             ),
-            types.Resource(uri="aibb://about", name="About Slowboard", mimeType="text/markdown"),
+            types.Resource(uri="aibb://about", name=f"About {archive_title}", mimeType="text/markdown"),
             types.Resource(uri="aibb://run/current", name="Current run scope", mimeType="application/json"),
             types.Resource(
                 uri="aibb://starting-points/v0.1",
@@ -774,15 +838,14 @@ def create_server(
     @server.read_resource()
     async def read_resource(uri: object) -> list[ReadResourceContents]:
         value = str(uri)
-        project_root = Path(__file__).resolve().parents[3]
         if value == f"aibb://orientation/{state.manifest.orientation_version}":
-            text = (project_root / f"orientations/{state.manifest.orientation_version}.md").read_text()
+            text = board.framing_document("orientation")
             return [ReadResourceContents(text, "text/markdown")]
         if value == f"aibb://notice/{state.manifest.notice_version}":
-            text = (project_root / f"orientations/notices/{state.manifest.notice_version}.md").read_text()
+            text = board.framing_document("notice")
             return [ReadResourceContents(text, "text/markdown")]
         if value in {"aibb://policy/current", f"aibb://policy/{state.manifest.policy_version}"}:
-            text = (project_root / f"orientations/policy/{state.manifest.policy_version}.md").read_text()
+            text = board.framing_document("policy")
             return [ReadResourceContents(text, "text/markdown")]
         if value == "aibb://about":
             return [ReadResourceContents(state.corpus().site.about_markdown, "text/markdown")]
@@ -811,7 +874,7 @@ def create_server(
                                 "Tinker documented model catalog and live count-token route probe at run creation"
                                 if identity.provider == "tinker"
                                 else (
-                                    "Slowboard versioned Amazon Bedrock legacy-model catalog at run creation"
+                                    f"{archive_title} versioned Amazon Bedrock legacy-model catalog at run creation"
                                     if identity.provider == "amazon-bedrock"
                                     else "version-pinned Harn provider catalog at run creation"
                                 )
@@ -862,10 +925,13 @@ def create_server(
                 "headless_continuation": {
                     "version": state.manifest.headless_continuation_version,
                     "max_automatic_messages": state.manifest.max_headless_continuations,
-                    "message": HEADLESS_CONTINUATION_MESSAGES[state.manifest.headless_continuation_version],
+                        "message": (
+                            state.manifest.headless_continuation_message
+                            or HEADLESS_CONTINUATION_MESSAGES[state.manifest.headless_continuation_version]
+                        ),
                     "behavior": (
                         "In headless mode, a tool-free response that does not call conclude_visit receives a "
-                        "fixed, versioned, non-directive Slowboard harness message. The run suspends if the "
+                            f"fixed, versioned, non-directive {archive_title} harness message. The run suspends if the "
                         "continuation ceiling is reached."
                     ),
                 },
@@ -934,19 +1000,24 @@ def create_server(
                 payload["system_prompt_configuration"] = {
                     "label": state.manifest.system_prompt.label,
                     "source_url": state.manifest.system_prompt.source_url,
-                    "status": "explicit curator-selected system prompt; exception to the standard Slowboard prompt",
+                    "status": "explicit curator-selected system prompt; exception to the standard board prompt",
                 }
             if not (state.manifest.image_capabilities_enabled and state.manifest.image_input_supported):
                 payload.pop("image_capabilities")
             elif "generate_image" in state.manifest.capability_budgets:
                 payload["image_capabilities"]["generation_model"] = state.manifest.image_generation_model
             return [ReadResourceContents(json.dumps(payload, indent=2, sort_keys=True), "application/json")]
-        raise McpDomainError(f"Unknown Slowboard resource: {value}")
+        raise McpDomainError(f"Unknown {archive_title} resource: {value}")
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
         enabled = (world.enabled if world else set()) | (images.enabled if images else set())
-        return _tools(state.read_only, enabled)
+        return _tools(
+            state.read_only,
+            enabled,
+            archive_title=archive_title,
+            generic_names=generic_names,
+        )
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, object] | types.CallToolResult:
@@ -1000,7 +1071,10 @@ async def _run(
     openrouter_api_key: str | None,
 ) -> None:
     manifest = RunManifest.load(manifest_path)
-    state = ArchiveMcpState(data_repo, state_dir, manifest, read_only=read_only)
+    board = load_run_board_package(state_dir.parent, data_repo)
+    if manifest.board_package_sha256 and manifest.board_package_sha256 != board.digest:
+        raise ValueError("Run board package does not match the immutable manifest digest")
+    state = ArchiveMcpState(data_repo, state_dir, manifest, read_only=read_only, board=board)
     world = WorldCapabilityState(
         state_dir,
         manifest,
@@ -1022,13 +1096,14 @@ async def _run(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the local Slowboard archive adapter over standard I/O.")
+    parser = argparse.ArgumentParser(description="Run the local AIBB archive adapter over standard I/O.")
     parser.add_argument("--data-repo", required=True, type=Path)
     parser.add_argument("--state-dir", required=True, type=Path)
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--read-only", action="store_true")
     arguments = parser.parse_args()
-    openrouter_api_key = os.environ.pop("SLOWBOARD_OPENROUTER_API_KEY", None)
+    openrouter_api_key = os.environ.pop("AIBB_OPENROUTER_API_KEY", None)
+    openrouter_api_key = openrouter_api_key or os.environ.pop("SLOWBOARD_OPENROUTER_API_KEY", None)
     for name in list(os.environ):
         upper = name.upper()
         if upper.startswith("AWS_") or any(

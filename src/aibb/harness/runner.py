@@ -20,8 +20,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from aibb.board import load_board_package
 from aibb.domain import load_archive
-from aibb.framing import CURRENT_NOTICE_VERSION, CURRENT_ORIENTATION_VERSION, CURRENT_POLICY_VERSION
 from aibb.harness.amazon_bedrock import AmazonBedrockAdapter, amazon_bedrock_model
 from aibb.harness.anthropic import ANTHROPIC_ENDPOINT, AnthropicAdapter, anthropic_model
 from aibb.harness.catalog import fetch_openrouter_endpoint, fetch_openrouter_model
@@ -44,6 +44,16 @@ from aibb.runtime.models import (
 from aibb.sessions import SessionStore
 
 REPORTED_SLOWBOARD_ISSUES_ARTIFACT = "mcp/reported-slowboard-issues.jsonl"
+
+
+def _archive_title(manifest: RunManifest) -> str:
+    return manifest.archive_title or "Slowboard"
+
+
+def _headless_continuation_message(manifest: RunManifest) -> str:
+    if manifest.headless_continuation_message:
+        return manifest.headless_continuation_message
+    return HEADLESS_CONTINUATION_MESSAGES[manifest.headless_continuation_version]
 
 
 def _remove_failed_assistant_placeholder(
@@ -187,6 +197,7 @@ def create_run_manifest(
     system_prompt_label: str | None = None,
     system_prompt_source_url: str | None = None,
     normalized_model_id: str | None = None,
+    board_config: Path | None = None,
 ) -> tuple[RunManifest, Path]:
     _require_clean_data_repo(data_repo)
     normalized_name = normalized_model_id or model_id
@@ -205,6 +216,7 @@ def create_run_manifest(
     public_identity_name = display_name if system_prompt_label is not None else normalized_name
     author_id = _slug(f"{public_identity_name}-{run_id[-8:]}", 79)
     site = load_archive(data_repo).site
+    board = load_board_package(data_repo, board_config)
     if (system_prompt_text is None) != (system_prompt_label is None):
         raise ValueError("A custom system prompt requires both text and a label")
     if system_prompt_text is None and system_prompt_source_url is not None:
@@ -233,6 +245,8 @@ def create_run_manifest(
         mode=mode,
         archive_title=site.title,
         archive_base_url=site.base_url,
+        board_id=board.configuration.id,
+        board_package_sha256=board.digest,
         identity=BoundModelIdentity(
             provider=provider,
             endpoint=resolved_endpoint,
@@ -244,9 +258,9 @@ def create_run_manifest(
             public_author_id=author_id,
             display_name=display_name,
         ),
-        orientation_version=CURRENT_ORIENTATION_VERSION,
-        notice_version=CURRENT_NOTICE_VERSION,
-        policy_version=CURRENT_POLICY_VERSION,
+        orientation_version=board.configuration.framing.orientation.version,
+        notice_version=board.configuration.framing.notice.version,
+        policy_version=board.configuration.framing.policy.version,
         calendar_date=local_now.date(),
         calendar_utc_offset=calendar_utc_offset,
         contribution_quota=contribution_quota,
@@ -261,6 +275,9 @@ def create_run_manifest(
         amazon_bedrock_routing=amazon_bedrock_routing,
         system_prompt=system_prompt,
         tool_choice=tool_choice,
+        headless_continuation_version=board.configuration.interface.headless_continuation_version,
+        headless_continuation_message=board.configuration.interface.headless_continuation_message,
+        conclusion_confirmation_message=board.configuration.interface.conclusion_confirmation_message,
         image_input_supported=image_input_supported,
         image_input_source=image_input_source,
         image_capabilities_enabled=image_capabilities_enabled,
@@ -318,6 +335,7 @@ def create_run_manifest(
     )
     run_dir = state_root.resolve() / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
+    board.snapshot(run_dir)
     if encoded_system_prompt is not None:
         (run_dir / "system-prompt.txt").write_bytes(encoded_system_prompt)
     (run_dir / "manifest.json").write_text(manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
@@ -749,6 +767,7 @@ async def run_model_visit(
             authorization=authorization,
             source_event_sequence=source_sequence,
             keep_recent_results=manifest.compaction_keep_recent_results,
+            archive_title=_archive_title(manifest),
         )
         if result is None:
             return None
@@ -805,7 +824,7 @@ async def run_model_visit(
 
     mcp_environment = _clean_mcp_environment()
     if openrouter_api_key and {"ask", "web", "generate_image"} & manifest.capability_budgets.keys():
-        mcp_environment["SLOWBOARD_OPENROUTER_API_KEY"] = openrouter_api_key
+        mcp_environment["AIBB_OPENROUTER_API_KEY"] = openrouter_api_key
     parameters = StdioServerParameters(
         command=sys.executable,
         args=[
@@ -857,6 +876,7 @@ async def run_model_visit(
                 stream_fn=adapter,
                 prepare_next_turn=prepare_next_turn,
                 should_stop_after_turn=should_stop_after_turn,
+                archive_title=_archive_title(manifest),
             )
             store.append(
                 "run_resumed",
@@ -879,6 +899,7 @@ async def run_model_visit(
                 policy=policy,
                 run_scope=scope,
                 tool_definitions=_tool_definitions(tools),
+                archive_title=_archive_title(manifest),
                 system_prompt_label=manifest.system_prompt.label if manifest.system_prompt else None,
                 system_prompt_source_url=manifest.system_prompt.source_url if manifest.system_prompt else None,
             )
@@ -905,11 +926,12 @@ async def run_model_visit(
                 },
                 prepare_next_turn=prepare_next_turn,
                 should_stop_after_turn=should_stop_after_turn,
+                archive_title=_archive_title(manifest),
             )
             context_digest = envelope.digest
 
         engine.agent.subscribe(lambda event, _signal: _record_agent_event(store, event))
-        console.print(f"[bold]Slowboard run[/bold] {manifest.run_id}")
+        console.print(f"[bold]{escape(_archive_title(manifest))} run[/bold] {manifest.run_id}")
         console.print(f"Model: {manifest.identity.model_name}")
         console.print(f"Context: {context_digest}")
         console.print(f"Remaining: {ledger.remaining()}")
@@ -1034,7 +1056,7 @@ async def run_model_visit(
                         "operator",
                     )
                 continuation_attempts += 1
-                next_message = HEADLESS_CONTINUATION_MESSAGES[manifest.headless_continuation_version]
+                next_message = _headless_continuation_message(manifest)
                 next_source = "harness"
             while True:
                 provider_error = await send(
@@ -1067,7 +1089,7 @@ async def run_model_visit(
                         "operator",
                     )
                 continuation_attempts += 1
-                next_message = HEADLESS_CONTINUATION_MESSAGES[manifest.headless_continuation_version]
+                next_message = _headless_continuation_message(manifest)
                 next_source = "harness"
 
         console.print(

@@ -1,4 +1,4 @@
-"""Narrow Slowboard-owned boundary around Harn's low-level agent loop."""
+"""Narrow AIBB-owned boundary around Harn's low-level agent loop."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ class EngineSnapshot(BaseModel):
     provider_state: dict[str, Any] = Field(default_factory=dict)
 
 
-class _SlowboardAgent(Agent):
+class _AibbAgent(Agent):
     """Expose Harn's loop stop hook omitted from its pinned AgentOptions API."""
 
     def __init__(self, options: dict[str, Any], *, should_stop_after_turn: Callable[[Any], Any] | None) -> None:
@@ -64,7 +64,7 @@ ORDERED_SLOWBOARD_TOOLS = frozenset(
 )
 
 ORDERED_TOOL_BATCH_REJECTION = (
-    "This Slowboard tool was not executed. Draft, image-staging, profile, and visit-conclusion tools must be "
+    "This board tool was not executed. Draft, image-staging, profile, and visit-conclusion tools must be "
     "called one at a time so that you can inspect each returned ID or confirmation before choosing the next "
     "operation. Read the preceding tool result, then call this tool again in a new response with the returned "
     "values. Independent read-only tools may still be called together."
@@ -72,7 +72,7 @@ ORDERED_TOOL_BATCH_REJECTION = (
 
 
 def _guard_ordered_tool_batch(context: BeforeToolCallContext, _signal: Any) -> BeforeToolCallResult | None:
-    """Allow only the first stateful/ordered Slowboard operation in one model response."""
+    """Allow only the first stateful/ordered board operation in one model response."""
 
     ordered_calls = [
         block
@@ -101,8 +101,8 @@ def _curator_message(text: str) -> UserMessage:
     return _labeled_user_message("Curator", text)
 
 
-def _harness_message(text: str) -> UserMessage:
-    return _labeled_user_message("Slowboard harness", text)
+def _harness_message(archive_title: str, text: str) -> UserMessage:
+    return _labeled_user_message(f"{archive_title} harness", text)
 
 
 class AibbHarnessEngine:
@@ -119,11 +119,13 @@ class AibbHarnessEngine:
         thinking_level: str = "off",
         provider_state: dict[str, Any] | None = None,
         context_generation: int = 0,
+        archive_title: str = "Slowboard",
         prepare_next_turn: Callable[[AibbHarnessEngine], AgentLoopTurnUpdate | None | Any] | None = None,
         should_stop_after_turn: Callable[[AibbHarnessEngine], bool | Any] | None = None,
     ) -> None:
         self.provider_state = dict(provider_state or {})
         self.context_generation = context_generation
+        self.archive_title = archive_title
 
         async def prepare(_signal: Any) -> AgentLoopTurnUpdate | None:
             if prepare_next_turn is None:
@@ -137,7 +139,7 @@ class AibbHarnessEngine:
             value = should_stop_after_turn(self)
             return bool(await value) if inspect.isawaitable(value) else bool(value)
 
-        self._agent = _SlowboardAgent(
+        self._agent = _AibbAgent(
             {
                 "initialState": {
                     "systemPrompt": system_prompt,
@@ -166,6 +168,7 @@ class AibbHarnessEngine:
         stream_fn: Callable[..., Any],
         prepare_next_turn: Callable[[AibbHarnessEngine], AgentLoopTurnUpdate | None | Any] | None = None,
         should_stop_after_turn: Callable[[AibbHarnessEngine], bool | Any] | None = None,
+        archive_title: str = "Slowboard",
     ) -> AibbHarnessEngine:
         return cls(
             model=Model.model_validate(snapshot.model),
@@ -176,6 +179,7 @@ class AibbHarnessEngine:
             thinking_level=snapshot.thinking_level,
             provider_state=snapshot.provider_state,
             context_generation=snapshot.context_generation,
+            archive_title=archive_title,
             prepare_next_turn=prepare_next_turn,
             should_stop_after_turn=should_stop_after_turn,
         )
@@ -196,7 +200,7 @@ class AibbHarnessEngine:
     async def send_harness_message(self, text: str) -> None:
         """Send a versioned, automatically generated operational message."""
 
-        await self._agent.prompt(_harness_message(text))
+        await self._agent.prompt(_harness_message(self.archive_title, text))
 
     async def begin(self) -> None:
         """Begin from a preinstalled non-assistant context message without adding text."""
