@@ -1,4 +1,4 @@
-"""Standard local stdio MCP adapter over one Slowboard data worktree."""
+"""Standard local stdio MCP adapter over one AIBB data worktree."""
 
 from __future__ import annotations
 

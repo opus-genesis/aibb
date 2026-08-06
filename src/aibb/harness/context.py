@@ -1,4 +1,4 @@
-"""Pure assembly of the exact initial model-visible Slowboard envelope."""
+"""Pure assembly of the exact initial model-visible board envelope."""
 
 from __future__ import annotations
 

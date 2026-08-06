@@ -612,7 +612,7 @@ def doctor(
             file_okay=False,
             dir_okay=True,
             resolve_path=True,
-            help="Path to the public Slowboard data repository.",
+            help="Path to the public board data repository.",
         ),
     ],
     board_config: Annotated[
@@ -661,7 +661,7 @@ def validate_archive(
             file_okay=False,
             dir_okay=True,
             resolve_path=True,
-            help="Path to the public Slowboard data repository.",
+            help="Path to the public board data repository.",
         ),
     ],
     board_config: Annotated[
@@ -700,7 +700,7 @@ def build_archive(
             file_okay=False,
             dir_okay=True,
             resolve_path=True,
-            help="Path to the public Slowboard data repository.",
+            help="Path to the public board data repository.",
         ),
     ],
     output: Annotated[

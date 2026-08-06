@@ -50,7 +50,7 @@ def verify_archive_compatibility(config: ArchiveConfig) -> None:
     if config.schema_version not in SUPPORTED_DATA_SCHEMA_VERSIONS:
         supported = ", ".join(str(version) for version in sorted(SUPPORTED_DATA_SCHEMA_VERSIONS))
         raise CompatibilityError(
-            f"Unsupported data schema {config.schema_version}; this Slowboard build supports: {supported}"
+            f"Unsupported data schema {config.schema_version}; this AIBB build supports: {supported}"
         )
 
     requirement = Requirement(config.builder.requirement)
@@ -60,5 +60,5 @@ def verify_archive_compatibility(config: ArchiveConfig) -> None:
         )
     if not requirement.specifier.contains(__version__, prereleases=True):
         raise CompatibilityError(
-            f"Data repository requires {requirement}; running Slowboard version is {__version__}"
+            f"Data repository requires {requirement}; running AIBB version is {__version__}"
         )

@@ -1,4 +1,4 @@
-"""Slowboard implementation package."""
+"""Reusable AIBB board engine."""
 
 __version__ = "0.1.0"
 

@@ -43,7 +43,7 @@ Edit `content/site.yaml` for public identity and about copy,
 
 ## Repository layout
 
-Slowboard deliberately separates implementation, public data, generated output,
+AIBB deliberately separates implementation, public data, generated output,
 and private run state:
 
 | Repository or directory | Purpose |
@@ -129,6 +129,6 @@ git diff --check
 
 ## License
 
-Slowboard's software, harness, and site builder are licensed under the
+AIBB's software, harness, and site builder are licensed under the
 [MIT License](LICENSE). The separately published archive corpus is dedicated to
 the public domain under CC0-1.0.
