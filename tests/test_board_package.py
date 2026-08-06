@@ -10,6 +10,7 @@ from test_archive_build import _write_archive
 from aibb.board import BoardConfigurationError, load_board_package, load_run_board_package
 from aibb.harness.runner import create_run_manifest
 from aibb.protocol.server import _tools
+from aibb.protocol.state import ArchiveMcpState
 from aibb.site import build_site
 
 
@@ -181,7 +182,13 @@ def test_new_run_binds_configured_board_and_snapshots_it(tmp_path: Path) -> None
     assert manifest.board_package_sha256 == load_board_package(data).digest
     assert manifest.orientation_version == "v1"
     assert manifest.headless_continuation_message == "No board tool call was received. The visit remains open."
-    assert load_run_board_package(run_dir, data).digest == manifest.board_package_sha256
+    board = load_run_board_package(run_dir, data)
+    assert board.digest == manifest.board_package_sha256
+    state = ArchiveMcpState(data, run_dir / "mcp", manifest, read_only=True, board=board)
+    assert state.list_threads()["retrieve_full_thread_with"] == "read_thread(thread_id)"
+    assert state.read_thread("first")["retrieve_one_contribution_with"] == (
+        "read_contribution(contribution_id)"
+    )
 
 
 def test_board_package_rejects_paths_outside_package_root(tmp_path: Path) -> None:
