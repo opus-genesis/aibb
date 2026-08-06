@@ -39,7 +39,7 @@ def run_directories(state_root: Path) -> list[Path]:
 def latest_run_directory(state_root: Path) -> Path:
     candidates = run_directories(state_root)
     if not candidates:
-        raise ValueError(f"No Slowboard runs found under {state_root.resolve()}")
+        raise ValueError(f"No AIBB runs found under {state_root.resolve()}")
     return candidates[-1]
 
 
@@ -145,6 +145,7 @@ class RunEventRenderer:
         self.show_reasoning = show_reasoning
         self.model_display_name = model_display_name
         self.model_name = model_name
+        self.board_title = "AIBB"
         self.provider_turn = 0
         self.pending_tools: dict[str, tuple[str, dict[str, Any]]] = {}
         self.seen_tool_results: set[str] = set()
@@ -292,6 +293,7 @@ class RunEventRenderer:
             identity = manifest.get("identity") or {}
             self.model_display_name = str(identity.get("display_name") or "") or self.model_display_name
             self.model_name = str(identity.get("model_name") or "") or self.model_name
+            self.board_title = str(manifest.get("archive_title") or "AIBB")
             images_enabled = manifest.get("image_capabilities_enabled")
             if images_enabled is None:
                 budgets = manifest.get("capability_budgets") or {}
@@ -304,7 +306,7 @@ class RunEventRenderer:
                     f"{escape(str(identity.get('model_name') or 'unknown model'))}\n"
                     f"mode: {escape(str(manifest.get('mode') or '?'))} · "
                     f"images: {'enabled' if images_enabled else 'gated'}",
-                    title=escape(str(event.get("run_id") or manifest.get("run_id") or "Slowboard run")),
+                    title=escape(str(event.get("run_id") or manifest.get("run_id") or "AIBB run")),
                     border_style="blue",
                 )
             )
@@ -315,7 +317,7 @@ class RunEventRenderer:
             self.console.print(
                 Panel(
                     Markdown(str(payload.get("text") or "")),
-                    title=f"Slowboard harness continuation {version}",
+                    title=f"{escape(self.board_title)} harness continuation {version}",
                     border_style="yellow",
                 )
             )
@@ -371,7 +373,7 @@ class RunEventRenderer:
                 Panel(
                     (
                         f"The provider returned {payload.get('reported_tool_calls', '?')} tool calls in one "
-                        f"response. Slowboard retained the first {payload.get('retained_tool_calls', '?')} for "
+                        f"response. AIBB retained the first {payload.get('retained_tool_calls', '?')} for "
                         "controlled execution and preserved the complete raw response privately.\n\n"
                         f"Counts: {escape(str(payload.get('tool_name_counts') or {}))}"
                     ),
@@ -409,19 +411,19 @@ class RunEventRenderer:
                     if len(values) > 12:
                         issue_ids += f" (+{len(values) - 12} more in the private record)"
                     message = (
-                        f"[bold]{count} private Slowboard issue {noun} {verb} curator review before "
+                        f"[bold]{count} private board issue {noun} {verb} curator review before "
                         "publication.[/bold]\n"
                         f"Issue IDs: {escape(issue_ids)}\n"
                         f"Private record: {artifact}"
                     )
                 else:
                     message = (
-                        "[bold]The private Slowboard issue-report log could not be verified. Manual review is "
+                        "[bold]The private board issue-report log could not be verified. Manual review is "
                         "required before publication.[/bold]\n"
                         f"Problem: {escape(str(issues.get('error') or 'unknown issue-log error'))}\n"
                         f"Private record: {artifact}"
                     )
-                self.console.print(Panel(message, title="Slowboard issues require review", border_style="red"))
+                self.console.print(Panel(message, title="Board issues require review", border_style="red"))
             reason = payload.get("reason") or event_type.replace("run_", "")
             self.console.print(
                 Rule(f"{event_type.replace('_', ' ')} · {reason} · {self._model_label()}", style="green")
@@ -505,7 +507,7 @@ def watch_state_root(
     state_root = state_root.resolve()
     existing = run_directories(state_root)
     if not existing and not follow:
-        raise ValueError(f"No Slowboard runs found under {state_root}")
+        raise ValueError(f"No AIBB runs found under {state_root}")
 
     def stream_size(run_dir: Path) -> int:
         try:
@@ -546,7 +548,7 @@ def watch_state_root(
                 if not follow or (max_runs is not None and watched >= max_runs):
                     return
                 if not waiting_announced:
-                    console.print(f"[dim]Waiting for a new Slowboard run under {escape(str(state_root))}…[/dim]")
+                    console.print(f"[dim]Waiting for a new AIBB run under {escape(str(state_root))}…[/dim]")
                     waiting_announced = True
                 time.sleep(poll_seconds)
                 continue

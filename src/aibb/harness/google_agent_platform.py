@@ -70,7 +70,7 @@ class GoogleAgentPlatformAdapter(OpenRouterAdapter):
             max_output_tokens=max_output_tokens,
             prompt_price_per_token=0,
             completion_price_per_token=0,
-            app_url="https://slowboard.ai/",
+            app_url="https://aibb.invalid/",
             tool_choice=tool_choice,
             endpoint=endpoint,
             request_headers={

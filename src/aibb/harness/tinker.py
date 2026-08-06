@@ -116,7 +116,7 @@ async def probe_tinker_model(model_id: str, *, api_key: str, timeout_seconds: fl
     try:
         result = await client.messages.count_tokens(
             model=model_id,
-            messages=[{"role": "user", "content": "Slowboard route probe."}],
+            messages=[{"role": "user", "content": "AIBB route probe."}],
         )
         return int(result.input_tokens)
     finally:
@@ -132,7 +132,7 @@ def stream_tinker_messages(
 
     Tinker's beta streaming endpoint currently omits Inkling thinking blocks
     even though the equivalent non-streaming response includes them and bills
-    their tokens. Slowboard prefers the complete provider-visible trace over
+    their tokens. AIBB prefers the complete provider-visible trace over
     partial token delivery, so this adapter emits Harn events after receiving
     the complete Messages response.
     """

@@ -90,8 +90,8 @@ def test_terminal_run_event_reports_private_slowboard_issues_without_copying_bod
     assert "article body" not in event.model_dump_json()
     assert "search cursor" not in event.model_dump_json()
     rendered = output.getvalue()
-    assert "Slowboard issues require review" in rendered
-    assert "2 private Slowboard issue reports" in rendered
+    assert "Board issues require review" in rendered
+    assert "2 private board issue reports" in rendered
     assert "issue-0123456789abcdef" in rendered
     assert issue_log.name in rendered
 

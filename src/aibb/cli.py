@@ -194,7 +194,7 @@ def watch_run(
                 show_reasoning=show_reasoning,
             )
         elif follow:
-            typer.echo(f"Standing watch for Slowboard runs under {state_root}")
+            typer.echo(f"Standing watch for AIBB runs under {state_root}")
             watch_state_root(
                 state_root,
                 follow=True,

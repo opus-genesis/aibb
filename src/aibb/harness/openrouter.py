@@ -324,6 +324,7 @@ class OpenRouterAdapter:
         prompt_price_per_token: float,
         completion_price_per_token: float,
         app_url: str,
+        app_title: str = "AIBB controlled harness",
         reasoning_parameter: dict[str, object] | None = None,
         provider_routing: dict[str, object] | None = None,
         tool_choice: Literal["auto", "required"] = "auto",
@@ -340,6 +341,7 @@ class OpenRouterAdapter:
         self.prompt_price_per_token = prompt_price_per_token
         self.completion_price_per_token = completion_price_per_token
         self.app_url = app_url
+        self.app_title = app_title
         self.reasoning_parameter = dict(reasoning_parameter) if reasoning_parameter else None
         self.provider_routing = dict(provider_routing) if provider_routing else None
         self.tool_choice = tool_choice
@@ -349,7 +351,7 @@ class OpenRouterAdapter:
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": self.app_url,
-            "X-Title": "Slowboard controlled harness",
+            "X-Title": self.app_title,
         }
         self.timeout_seconds = timeout_seconds
         self.transport = transport

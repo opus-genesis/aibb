@@ -248,7 +248,7 @@ def test_run_event_renderer_shows_reasoning_tools_results_and_usage() -> None:
     assert "225 tokens · $0.1101" in rendered
     assert "503 limited availability" in rendered
     assert "failure is retained and the run remains resumable" in rendered
-    assert "Slowboard harness continuation v0.1" in rendered
+    assert "AIBB harness continuation v0.1" in rendered
     assert "Continue through tools or conclude." in rendered
     assert "Model-visible messages: 30 → 24" in rendered
     assert "removed branch and paid usage remain preserved" in rendered
@@ -357,8 +357,8 @@ def test_run_event_renderer_repeats_reported_issue_notice_at_terminal_boundary()
 
     assert stopped is True
     rendered = output.getvalue()
-    assert "Slowboard issues require review" in rendered
-    assert "1 private Slowboard issue report" in rendered
+    assert "Board issues require review" in rendered
+    assert "1 private board issue report" in rendered
     assert "issue-0123456789abcdef" in rendered
     assert "mcp/reported-slowboard-issues.jsonl" in rendered
     assert "run completed · model_concluded_visit" in rendered
@@ -421,7 +421,7 @@ def test_standing_watcher_replays_newest_then_attaches_to_new_run(tmp_path: Path
     rendered = output.getvalue()
     assert "run-watch-current" in rendered
     assert "Current" in rendered
-    assert "Waiting for a new Slowboard run" in rendered
+    assert "Waiting for a new AIBB run" in rendered
     assert "run-watch-next" in rendered
     assert "Next" in rendered
     assert "Old History" not in rendered
@@ -443,7 +443,7 @@ def test_standing_watcher_can_start_before_first_run(tmp_path: Path, monkeypatch
     watch_state_root(tmp_path, poll_seconds=0.001, output=output, max_runs=1)
 
     rendered = output.getvalue()
-    assert "Waiting for a new Slowboard run" in rendered
+    assert "Waiting for a new AIBB run" in rendered
     assert "run-watch-first" in rendered
     assert "First" in rendered
 

@@ -541,18 +541,18 @@ def _render_reported_slowboard_issues_notice(
         if len(values) > 12:
             issue_ids += f" (+{len(values) - 12} more in the private record)"
         message = (
-            f"[bold]{count} private Slowboard issue {noun} {verb} curator review before publication.[/bold]\n"
+            f"[bold]{count} private board issue {noun} {verb} curator review before publication.[/bold]\n"
             f"Issue IDs: {escape(issue_ids)}\n"
             f"Private record: {escape(str(run_dir.resolve() / str(summary['artifact'])))}"
         )
     else:
         message = (
-            "[bold]The private Slowboard issue-report log could not be verified. Manual review is required "
+            "[bold]The private board issue-report log could not be verified. Manual review is required "
             "before publication.[/bold]\n"
             f"Problem: {escape(str(summary.get('error') or 'unknown issue-log error'))}\n"
             f"Private record: {escape(str(run_dir.resolve() / str(summary['artifact'])))}"
         )
-    console.print(Panel(message, title="Slowboard issues require review", border_style="red"))
+    console.print(Panel(message, title="Board issues require review", border_style="red"))
 
 
 def record_terminal_run_event(
@@ -664,6 +664,7 @@ async def run_model_visit(
             prompt_price_per_token=prompt_price,
             completion_price_per_token=completion_price,
             app_url=load_archive(data_repo).site.base_url,
+            app_title=f"{_archive_title(manifest)} controlled harness",
             reasoning_parameter=manifest.reasoning.request_parameter,
             provider_routing=(
                 manifest.openrouter_routing.request_parameter() if manifest.openrouter_routing is not None else None
