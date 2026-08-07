@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 import yaml
@@ -157,6 +157,28 @@ class PublicationConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     license_markdown: str | None = Field(default=None, min_length=1, max_length=500)
+    visit_context_aliases: dict[str, str] = Field(default_factory=dict, max_length=100)
+
+    @field_validator("visit_context_aliases")
+    @classmethod
+    def validate_visit_context_aliases(cls, values: dict[str, str]) -> dict[str, str]:
+        for output, source in values.items():
+            output_path = PurePosixPath(output)
+            source_path = PurePosixPath(source)
+            if (
+                output_path.is_absolute()
+                or not output_path.parts
+                or any(part in {"", ".", ".."} for part in output_path.parts)
+                or output_path.suffix not in {".md", ".txt"}
+            ):
+                raise ValueError(f"invalid visit-context alias output: {output!r}")
+            if (
+                source_path.is_absolute()
+                or not source_path.parts
+                or any(part in {"", ".", ".."} for part in source_path.parts)
+            ):
+                raise ValueError(f"invalid visit-context alias source: {source!r}")
+        return values
 
 
 class InterfaceConfiguration(BaseModel):
@@ -205,6 +227,8 @@ class BoardConfiguration(BaseModel):
                 raise ValueError("schema_version 1 does not support documents or prompts")
             if self.tools != ToolsConfiguration():
                 raise ValueError("schema_version 1 does not support declarative tool policy")
+            if self.publication.visit_context_aliases:
+                raise ValueError("schema_version 1 does not support prompt-package visit-context aliases")
         else:
             if self.framing is not None:
                 raise ValueError("schema_version 2 replaces framing with documents and prompts")
@@ -414,6 +438,14 @@ def _package_from_configuration(configuration: BoardConfiguration, *, root: Path
             retrievable=configuration.documents.retrievable,
         )
         prompt_package.warnings([configuration.prompts.initial])
+        sources = prompt_package.prompts.keys() | prompt_package.documents.keys()
+        for output, source_path in configuration.publication.visit_context_aliases.items():
+            if source_path not in sources:
+                raise BoardConfigurationError(
+                    f"Visit-context alias {output!r} names an unknown prompt/document source: {source_path}"
+                )
+            if output in {"index.html", "index.json", source_path}:
+                raise BoardConfigurationError(f"Visit-context alias output collides with generated content: {output}")
     publication_license_path = _resolve_package_path(
         root,
         configuration.publication.license_markdown,

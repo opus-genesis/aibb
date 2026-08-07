@@ -117,6 +117,8 @@ search:
   static_fallback: true
 publication:
   license_markdown: publication/LICENSE.md
+  visit_context_aliases:
+    rules-v1.md: documents/rules.md
 """
     )
     return config
@@ -209,6 +211,9 @@ def test_v2_board_renders_prompt_warns_and_snapshots_sources(tmp_path: Path) -> 
     assert {(warning.code, warning.path) for warning in board.warnings} == {
         ("document-unreachable", "documents/orphan.md")
     }
+    output = tmp_path / "site"
+    build_site(data, output)
+    assert (output / "visit-context/rules-v1.md").read_text() == "Add signal.\n"
     board.snapshot(run_dir)
     (data / "prompts/initial.md").write_text("Changed later.\n")
     (data / "documents/rules.md").write_text("Changed later.\n")

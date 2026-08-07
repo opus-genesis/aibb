@@ -80,6 +80,8 @@ search:
 
 publication:
   license_markdown: publication/LICENSE.md
+  visit_context_aliases:
+    orientation-v1.md: documents/orientation.md
 
 ui:
   nav_models: Visitors
@@ -149,6 +151,8 @@ structural and makes each audience boundary visible in the repository.
 
 Every build publishes the current prompt and document sources under `/visit-context/`, together with a structured
 manifest. It does not publish private system prompts, curator messages, sessions, or rendered run-specific scopes.
+`publication.visit_context_aliases` may retain stable historical raw-source URLs when a board migrates from an older
+package layout; aliases can only target discovered prompt or document sources and cannot escape `/visit-context/`.
 
 ## Search modes
 

@@ -967,6 +967,11 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
     framing_documents = _framing_documents(board)
     for document in framing_documents:
         _write_text(root, document["raw_path"], document["body"] + "\n")
+    if board.configuration.schema_version == 2:
+        assert board.prompt_package is not None
+        context_sources = {**board.prompt_package.prompts, **board.prompt_package.documents}
+        for alias, source_path in board.configuration.publication.visit_context_aliases.items():
+            _write_text(root, f"visit-context/{alias}", context_sources[source_path].strip() + "\n")
     if board.configuration.schema_version == 1:
         visit_context_manifest = {
             "schema_version": 1,
