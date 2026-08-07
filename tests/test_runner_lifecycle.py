@@ -198,8 +198,11 @@ def test_run_cli_exposes_public_developer_override() -> None:
     result = CliRunner().invoke(app, ["run", "--help"])
 
     assert result.exit_code == 0
+    assert "[BOARD]" in result.output
+    assert "--production" not in result.output
     assert "--developer" in result.output
     assert "presentation-poor" in result.output
+    assert "inferred from provider" in result.output
 
 
 def test_extend_inference_budget_can_raise_provider_call_ceiling(tmp_path: Path) -> None:
@@ -866,11 +869,9 @@ def test_cli_creates_bedrock_run_without_exposing_optional_openrouter_tools(
         app,
         [
             "run",
-            "--data-repo",
             str(data),
             "--state-root",
             str(state),
-            "--production",
             "--provider",
             "amazon-bedrock",
             "--bedrock-region",
@@ -902,7 +903,6 @@ def test_cli_creates_tinker_inkling_small_run_with_route_independent_public_iden
     monkeypatch,
 ) -> None:
     data = tmp_path / "data"
-    state = tmp_path / "state"
     _write_archive(data)
     subprocess.run(["git", "init", "-q", str(data)], check=True)
     subprocess.run(["git", "-C", str(data), "add", "."], check=True)
@@ -934,6 +934,7 @@ def test_cli_creates_tinker_inkling_small_run_with_route_independent_public_iden
         return 7
 
     monkeypatch.setenv("TINKER_API_KEY", "private-tinker-token")
+    monkeypatch.setenv("AIBB_HOME", str(tmp_path / "aibb-home"))
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr("aibb.cli.run_model_visit", fake_run_model_visit)
     monkeypatch.setattr("aibb.cli.probe_tinker_model", fake_probe_tinker_model)
@@ -942,17 +943,11 @@ def test_cli_creates_tinker_inkling_small_run_with_route_independent_public_iden
         app,
         [
             "run",
-            "--data-repo",
             str(data),
-            "--state-root",
-            str(state),
-            "--production",
             "--provider",
             "tinker",
             "--model",
             TINKER_INKLING_SMALL_SERVERLESS_256K,
-            "--display-name",
-            "Inkling-Small",
             "--mode",
             "headless",
         ],
@@ -961,6 +956,7 @@ def test_cli_creates_tinker_inkling_small_run_with_route_independent_public_iden
     assert result.exit_code == 0, result.output
     ready = next(json.loads(line) for line in result.output.splitlines() if line.startswith("{"))
     manifest = RunManifest.load(Path(ready["state"]) / "manifest.json")
+    assert Path(ready["state"]).parent == tmp_path / "aibb-home/state/slowboard"
     assert ready["provider"] == "tinker"
     assert ready["model_context_window"] == TINKER_INKLING_SMALL_CONTEXT_WINDOW
     assert ready["reasoning"]["selected_effort"] == "high"
@@ -969,6 +965,7 @@ def test_cli_creates_tinker_inkling_small_run_with_route_independent_public_iden
     assert manifest.identity.endpoint == TINKER_ANTHROPIC_ENDPOINT
     assert manifest.identity.model_name == TINKER_INKLING_SMALL_SERVERLESS_256K
     assert manifest.identity.normalized_model_name == TINKER_INKLING_SMALL
+    assert manifest.identity.display_name == "Inkling-Small"
     assert manifest.identity.public_author_id.startswith("thinkingmachines-inkling-small-")
     assert manifest.reasoning.source == "tinker-catalog"
     assert "generate_image" not in manifest.capability_budgets

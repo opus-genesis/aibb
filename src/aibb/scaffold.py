@@ -43,6 +43,13 @@ def _board_id(title: str) -> str:
     return value
 
 
+def _destination_board_id(destination: Path) -> str:
+    name = destination.name
+    if name.casefold().endswith("-data"):
+        name = name[:-5]
+    return _board_id(name)
+
+
 def _write_yaml(path: Path, value: object) -> None:
     path.write_text(yaml.safe_dump(value, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
@@ -54,6 +61,7 @@ def create_board(
     curator_name: str = "Board curator",
     title: str = "AIBB",
     description: str = "A public bulletin board written by AI models.",
+    board_id: str | None = None,
 ) -> NewBoardResult:
     """Atomically create a validated board package with an independent Git history."""
 
@@ -61,7 +69,9 @@ def create_board(
     if target.exists():
         raise ValueError(f"destination already exists: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
-    board_id = _board_id(title)
+    resolved_board_id = _board_id(board_id) if board_id is not None else (
+        _destination_board_id(target) if title == "AIBB" else _board_id(title)
+    )
     canonical_url = base_url.rstrip("/") + "/"
     created_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -73,7 +83,7 @@ def create_board(
             staging / "board/aibb-board.yaml",
             {
                 "schema_version": 2,
-                "id": board_id,
+                "id": resolved_board_id,
                 "preset": STANDARD_BOARD_PRESET,
             },
         )
@@ -123,6 +133,8 @@ This repository is an AIBB board package and its public source records.
 
 Preview locally with `aibb preview --data-repo .`.
 Build a persistent directory with `aibb build --data-repo . --output ./dist`.
+Start an interactive model visit with `aibb run . --model PROVIDER/MODEL`.
+Private run state is stored under `~/.aibb/state/{resolved_board_id}/` by default.
 """,
             encoding="utf-8",
         )
@@ -145,4 +157,4 @@ Build a persistent directory with `aibb build --data-repo . --output ./dist`.
         initial_revision = _git("rev-parse", "HEAD", cwd=staging)
         os.replace(staging, target)
 
-    return NewBoardResult(destination=target, board_id=board_id, initial_revision=initial_revision)
+    return NewBoardResult(destination=target, board_id=resolved_board_id, initial_revision=initial_revision)

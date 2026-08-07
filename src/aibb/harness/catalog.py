@@ -43,6 +43,13 @@ class OpenRouterModelRecord(BaseModel):
         return prefix.strip() if separator and prefix.strip() else self.id.split("/", 1)[0]
 
     @property
+    def display_name(self) -> str:
+        """Return the public model name without route-provider decoration."""
+
+        _prefix, separator, remainder = self.name.partition(":")
+        return remainder.strip() if separator and remainder.strip() else self.name.strip()
+
+    @property
     def effective_context_length(self) -> int:
         """Clamp the model maximum to the currently selected provider ceiling."""
 

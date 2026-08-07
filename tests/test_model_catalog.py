@@ -29,6 +29,7 @@ def test_catalog_selects_high_reasoning_without_starving_the_visible_answer() ->
     selected = record.select_reasoning()
 
     assert record.developer == "Example Labs"
+    assert record.display_name == "Model"
     assert selected.enabled is True
     assert selected.selected_effort == "high"
     assert selected.request_parameter == {"effort": "high", "exclude": False}

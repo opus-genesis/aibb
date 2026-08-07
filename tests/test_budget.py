@@ -73,6 +73,16 @@ def test_legacy_manifest_expiry_is_discarded() -> None:
     assert "expires_at" not in restored.model_dump(mode="json")
 
 
+def test_run_manifest_accepts_local_board_url_but_not_public_plain_http() -> None:
+    local = make_manifest().model_copy(update={"archive_base_url": "http://127.0.0.1:8000/"})
+
+    assert RunManifest.model_validate(local.model_dump()).archive_base_url == "http://127.0.0.1:8000/"
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        RunManifest.model_validate(
+            {**make_manifest().model_dump(), "archive_base_url": "http://board.example/"}
+        )
+
+
 def test_budget_reserve_reconcile_and_resume(tmp_path: Path) -> None:
     manifest = make_manifest()
     path = tmp_path / "budgets.json"

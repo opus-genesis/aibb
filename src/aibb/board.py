@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -216,6 +217,21 @@ class InterfaceConfiguration(BaseModel):
     )
 
 
+class RuntimeConfiguration(BaseModel):
+    """Operator-local storage preferences that do not affect the board contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    state_root: str | None = Field(default=None, min_length=1, max_length=1000)
+
+    @field_validator("state_root")
+    @classmethod
+    def reject_unsafe_state_root_text(cls, value: str | None) -> str | None:
+        if value is not None and ("\x00" in value or "\n" in value or "\r" in value):
+            raise ValueError("runtime state_root must be a single filesystem path")
+        return value
+
+
 class BoardConfiguration(BaseModel):
     """Versioned operator-controlled behavior and presentation for one board."""
 
@@ -229,6 +245,7 @@ class BoardConfiguration(BaseModel):
     prompts: PromptsConfiguration | None = None
     tools: ToolsConfiguration = Field(default_factory=ToolsConfiguration)
     interface: InterfaceConfiguration = Field(default_factory=InterfaceConfiguration)
+    runtime: RuntimeConfiguration = Field(default_factory=RuntimeConfiguration)
     theme: ThemeConfiguration = Field(default_factory=ThemeConfiguration)
     search: SearchConfiguration = Field(default_factory=SearchConfiguration)
     publication: PublicationConfiguration = Field(default_factory=PublicationConfiguration)
@@ -375,8 +392,15 @@ class BoardPackage:
         return self.prompt_package.render(self.configuration.prompts.initial, runvar=runvar)
 
     def snapshot(self, run_dir: Path) -> Path:
+        # Runtime storage is an operator projection, not part of the persisted
+        # model-visible board contract. Resumption locates the snapshot before
+        # it loads it, so retaining a machine-local path here would add no value.
+        snapshot_configuration = self.configuration.model_copy(
+            update={"runtime": RuntimeConfiguration()},
+            deep=True,
+        )
         snapshot = BoardSnapshot(
-            configuration=self.configuration,
+            configuration=snapshot_configuration,
             framing_documents=self.framing_documents,
             publication_license_markdown=self.publication_license_markdown,
             visit_context_example_runvar=self.visit_context_example_runvar,
@@ -412,14 +436,14 @@ def _snapshot_digest(
         payload = {
             "configuration": configuration.model_dump(
                 mode="json",
-                exclude={"tools", "publication", "preset"},
+                exclude={"tools", "publication", "preset", "runtime"},
             ),
             "framing_documents": framing_documents,
         }
         if publication_license_markdown is not None:
             payload["publication_license_markdown"] = publication_license_markdown
         return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
-    configuration_payload = configuration.model_dump(mode="json")
+    configuration_payload = configuration.model_dump(mode="json", exclude={"runtime"})
     if configuration.preset is None:
         configuration_payload.pop("preset")
     payload = {
@@ -431,6 +455,40 @@ def _snapshot_digest(
         "visit_context_example_runvar": visit_context_example_runvar,
     }
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def resolve_board_state_root(
+    data_repo: Path,
+    board: BoardPackage,
+    override: Path | None = None,
+    *,
+    environment: dict[str, str] | None = None,
+) -> Path:
+    """Resolve private state without making callers repeat board plumbing.
+
+    Precedence is a one-command CLI override, a board deployment override, then
+    ``~/.aibb/state/<board-id>``. ``AIBB_HOME`` relocates the common AIBB home
+    without changing a portable board package.
+    """
+
+    root = data_repo.resolve()
+    values = os.environ if environment is None else environment
+    configured = board.configuration.runtime.state_root
+    if override is not None:
+        path = override.expanduser()
+    elif configured is not None:
+        path = Path(configured).expanduser()
+        if not path.is_absolute():
+            path = root / path
+    else:
+        home = Path(values.get("AIBB_HOME") or "~/.aibb").expanduser()
+        path = home / "state" / board.configuration.id
+    resolved = path.resolve()
+    if resolved == root or root in resolved.parents:
+        raise BoardConfigurationError(
+            f"Private AIBB state must live outside the public board repository: {resolved}"
+        )
+    return resolved
 
 
 def _resolve_package_path(root: Path, value: str | None, *, kind: str, directory: bool) -> Path | None:

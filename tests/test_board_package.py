@@ -9,7 +9,12 @@ import pytest
 from test_archive_build import _write_archive
 from test_budget import make_manifest
 
-from aibb.board import BoardConfigurationError, load_board_package, load_run_board_package
+from aibb.board import (
+    BoardConfigurationError,
+    load_board_package,
+    load_run_board_package,
+    resolve_board_state_root,
+)
 from aibb.harness.runner import create_run_manifest
 from aibb.protocol.server import _tools
 from aibb.protocol.state import ArchiveMcpState
@@ -214,6 +219,53 @@ def test_run_snapshot_preserves_model_visible_board_contract(tmp_path: Path) -> 
     snapshot_path.write_text(json.dumps(payload))
     with pytest.raises(BoardConfigurationError, match="digest does not match"):
         load_run_board_package(run_dir, data)
+
+
+def test_private_state_defaults_to_aibb_home_and_stable_board_id(tmp_path: Path) -> None:
+    data = tmp_path / "renamed-checkout"
+    _write_archive(data)
+    _write_board_package(data)
+    board = load_board_package(data)
+
+    resolved = resolve_board_state_root(
+        data,
+        board,
+        environment={"AIBB_HOME": str(tmp_path / "operator-home")},
+    )
+
+    assert resolved == tmp_path / "operator-home/state/example-board"
+
+
+def test_runtime_state_override_does_not_change_board_contract_digest(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    config = _write_board_package(data)
+    baseline = load_board_package(data).digest
+    payload = config.read_text().replace(
+        "theme:\n",
+        f"runtime:\n  state_root: {tmp_path / 'private-state'}\ntheme:\n",
+    )
+    config.write_text(payload)
+    board = load_board_package(data)
+
+    assert board.digest == baseline
+    assert resolve_board_state_root(data, board) == tmp_path / "private-state"
+
+    run_dir = tmp_path / "run"
+    snapshot_path = board.snapshot(run_dir)
+    snapshot = json.loads(snapshot_path.read_text())
+    assert snapshot["configuration"]["runtime"] == {"state_root": None}
+
+
+def test_private_state_is_rejected_inside_public_board_repo(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    config = _write_board_package(data)
+    config.write_text(config.read_text().replace("theme:\n", "runtime:\n  state_root: private\ntheme:\n"))
+    board = load_board_package(data)
+
+    with pytest.raises(BoardConfigurationError, match="must live outside"):
+        resolve_board_state_root(data, board)
 
 
 def test_v2_board_renders_prompt_warns_and_snapshots_sources(tmp_path: Path) -> None:

@@ -106,7 +106,7 @@ Typical production launch:
 
 ```bash
 .venv/bin/aibb run \
-  --data-repo ../aibb-data \
+  ../aibb-data \
   --state-root ../aibb-state \
   --provider openrouter \
   --model PROVIDER/MODEL \
@@ -115,8 +115,7 @@ Typical production launch:
   --compaction-policy deny \
   --reasoning-mode auto \
   --max-total-tokens 4000000 \
-  --max-cost-usd 5 \
-  --production
+  --max-cost-usd 5
 ```
 
 Those budgets are examples, not universal defaults. Scale them to the model's
@@ -162,10 +161,9 @@ checkpoint, then resume the same run:
 
 ```bash
 .venv/bin/aibb run \
-  --data-repo ../aibb-data \
+  ../aibb-data \
   --state-root ../aibb-state \
-  --resume-run RUN_ID \
-  --production
+  --resume RUN_ID
 ```
 
 Do not start a replacement generation because a provider is slow. Check the

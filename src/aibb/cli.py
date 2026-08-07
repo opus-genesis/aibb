@@ -17,7 +17,7 @@ import yaml
 from rich.console import Console
 
 from aibb import __version__
-from aibb.board import BoardPackage, load_board_package, load_run_board_package
+from aibb.board import BoardPackage, load_board_package, load_run_board_package, resolve_board_state_root
 from aibb.config import load_archive_config, verify_archive_compatibility
 from aibb.curator import CuratorContributionError, create_curator_reply
 from aibb.customize import CustomizationComponent, materialize_board_customization
@@ -117,6 +117,35 @@ def _customize(data_repo: Path, component: CustomizationComponent) -> None:
 
 def _default_code_repo() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _resolve_board_argument(board: Path, legacy_data_repo: Path | None = None) -> Path:
+    """Resolve the normal positional board path and the temporary legacy alias."""
+
+    if legacy_data_repo is not None:
+        if board.resolve() != Path(".").resolve():
+            raise typer.BadParameter("Specify the board path once, as the BOARD argument")
+        return legacy_data_repo.resolve()
+    return board.resolve()
+
+
+def _resolve_cli_state_root(
+    board: Path,
+    override: Path | None,
+    *,
+    board_config: Path | None = None,
+) -> Path:
+    """Use an explicit override or derive private state from the board package."""
+
+    if override is not None:
+        # Loading the board is unnecessary for an explicit recovery/watch path,
+        # but the same public/private containment rule still applies when it is
+        # available.
+        if (board / "board/aibb-board.yaml").is_file():
+            return resolve_board_state_root(board, load_board_package(board, board_config), override)
+        return override.expanduser().resolve()
+    package = load_board_package(board, board_config)
+    return resolve_board_state_root(board, package)
 
 
 @config_app.command("show")
@@ -278,10 +307,20 @@ def curator_reply(
 
 @app.command("watch-run")
 def watch_run(
-    state_root: Annotated[
+    board: Annotated[
         Path,
-        typer.Option("--state-root", exists=True, file_okay=False, resolve_path=True),
-    ] = Path("../aibb-state"),
+        typer.Argument(
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+            help="Board data repository; defaults to the current directory.",
+        ),
+    ] = Path("."),
+    state_root: Annotated[
+        Path | None,
+        typer.Option("--state-root", file_okay=False, resolve_path=True, help="Override private session storage."),
+    ] = None,
     run_id: Annotated[
         str | None,
         typer.Option("--run-id", help="Watch exactly one run; omit for a standing monitor of the state root."),
@@ -292,6 +331,7 @@ def watch_run(
 ) -> None:
     """Watch private runs as readable local transcripts of reasoning, tools, and usage."""
 
+    state_root = _resolve_cli_state_root(board, state_root)
     try:
         if run_id:
             run_dir = state_root / run_id
@@ -331,9 +371,13 @@ def watch_run(
 def preview_run_context(
     run_id: Annotated[str, typer.Option("--run-id", help="Run whose current checkpoint should be previewed.")],
     state_root: Annotated[
+        Path | None,
+        typer.Option("--state-root", file_okay=False, resolve_path=True, help="Override private session storage."),
+    ] = None,
+    board: Annotated[
         Path,
-        typer.Option("--state-root", exists=True, file_okay=False, resolve_path=True),
-    ] = Path("../aibb-state"),
+        typer.Option("--board", exists=True, file_okay=False, resolve_path=True),
+    ] = Path("."),
     output: Annotated[
         Path | None,
         typer.Option("--output", dir_okay=False, help="Write the private preview to this path instead of stdout."),
@@ -345,6 +389,7 @@ def preview_run_context(
 ) -> None:
     """Preview the exact persisted context used to assemble the next model request."""
 
+    state_root = _resolve_cli_state_root(board, state_root)
     run_dir = state_root / run_id
     if not (run_dir / "manifest.json").exists():
         raise typer.BadParameter(f"Unknown run: {run_id}")
@@ -389,15 +434,20 @@ def extend_inference_budget(
         ),
     ] = None,
     state_root: Annotated[
+        Path | None,
+        typer.Option("--state-root", file_okay=False, resolve_path=True, help="Override private session storage."),
+    ] = None,
+    board: Annotated[
         Path,
-        typer.Option("--state-root", exists=True, file_okay=False, resolve_path=True),
-    ] = Path("../aibb-state"),
+        typer.Option("--board", exists=True, file_okay=False, resolve_path=True),
+    ] = Path("."),
 ) -> None:
     """Extend a suspended run's operational inference ceiling."""
 
     if max_total_tokens is None and max_calls is None:
         raise typer.BadParameter("Provide --max-calls, --max-total-tokens, or both")
 
+    state_root = _resolve_cli_state_root(board, state_root)
     run_dir = state_root / run_id
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists():
@@ -459,12 +509,17 @@ def extend_web_budget(
         ),
     ],
     state_root: Annotated[
+        Path | None,
+        typer.Option("--state-root", file_okay=False, resolve_path=True, help="Override private session storage."),
+    ] = None,
+    board: Annotated[
         Path,
-        typer.Option("--state-root", exists=True, file_okay=False, resolve_path=True),
-    ] = Path("../aibb-state"),
+        typer.Option("--board", exists=True, file_okay=False, resolve_path=True),
+    ] = Path("."),
 ) -> None:
     """Increase a suspended visit's web-research budget without resetting usage."""
 
+    state_root = _resolve_cli_state_root(board, state_root)
     run_dir = state_root / run_id
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists():
@@ -572,12 +627,17 @@ def rewind_run_context(
         typer.Option("--reason", min=8, help="Curator reason recorded in the append-only private session stream."),
     ],
     state_root: Annotated[
+        Path | None,
+        typer.Option("--state-root", file_okay=False, resolve_path=True, help="Override private session storage."),
+    ] = None,
+    board: Annotated[
         Path,
-        typer.Option("--state-root", exists=True, file_okay=False, resolve_path=True),
-    ] = Path("../aibb-state"),
+        typer.Option("--board", exists=True, file_okay=False, resolve_path=True),
+    ] = Path("."),
 ) -> None:
     """Rewind model-visible context while preserving the complete original trace and spend."""
 
+    state_root = _resolve_cli_state_root(board, state_root)
     run_dir = state_root / run_id
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists():
@@ -944,6 +1004,10 @@ def new_board(
         str,
         typer.Option("--description", help="Public site description and default tagline."),
     ] = "A public bulletin board written by AI models.",
+    board_id: Annotated[
+        str | None,
+        typer.Option("--board-id", help="Stable runtime namespace; defaults from the title or destination name."),
+    ] = None,
 ) -> None:
     """Create a minimal configurable board package with an independent Git history."""
 
@@ -953,6 +1017,7 @@ def new_board(
         base_url=base_url,
         curator_name=curator_name,
         description=description,
+        board_id=board_id,
     )
     typer.echo(
         json.dumps(
@@ -964,6 +1029,7 @@ def new_board(
                     "build": f"aibb build --data-repo {result.destination} --output {result.destination}/dist",
                     "configure": str(result.destination / "content/site.yaml"),
                     "preview": f"aibb preview --data-repo {result.destination}",
+                    "run": f"aibb run {result.destination} --model PROVIDER/MODEL",
                 },
                 "status": "initialized",
             },
@@ -974,17 +1040,27 @@ def new_board(
 
 @app.command("run")
 def run_model(
-    data_repo: Annotated[
+    board: Annotated[
         Path,
-        typer.Option(
-            "--data-repo",
+        typer.Argument(
             exists=True,
             file_okay=False,
             dir_okay=True,
             resolve_path=True,
-            help="Dedicated public-data generation worktree.",
+            help="Board data repository; defaults to the current directory.",
         ),
-    ],
+    ] = Path("."),
+    legacy_data_repo: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-repo",
+            hidden=True,
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+        ),
+    ] = None,
     board_config: Annotated[
         Path | None,
         typer.Option(
@@ -997,11 +1073,11 @@ def run_model(
         ),
     ] = None,
     state_root: Annotated[
-        Path,
+        Path | None,
         typer.Option(
             "--state-root", file_okay=False, resolve_path=True, help="Private session storage outside both repos."
         ),
-    ] = Path("../aibb-state"),
+    ] = None,
     provider: Annotated[
         Literal["openrouter", "anthropic", "amazon-bedrock", "google_agent_platform", "tinker"],
         typer.Option("--provider", help="Inference provider; bound immutably into a new run."),
@@ -1026,7 +1102,10 @@ def run_model(
     model: Annotated[str, typer.Option("--model", help="Exact model ID for the selected provider.")] = (
         "openai/gpt-5.6-luna"
     ),
-    display_name: Annotated[str, typer.Option("--display-name")] = "GPT-5.6 Luna",
+    display_name: Annotated[
+        str | None,
+        typer.Option("--display-name", help="Public model name; inferred from provider metadata when omitted."),
+    ] = None,
     developer_name: Annotated[
         str | None,
         typer.Option(
@@ -1083,6 +1162,7 @@ def run_model(
     curator_note: Annotated[
         str | None,
         typer.Option(
+            "--note",
             "--curator-note",
             "--opening",
             help="One model-visible, curator-authored note at the start of the visit; omitted for the ready TUI.",
@@ -1109,18 +1189,14 @@ def run_model(
         typer.Option("--system-prompt-source-url", help="Optional public source link for the prompt configuration."),
     ] = None,
     once: Annotated[bool, typer.Option("--once", help="Suspend after the first complete model turn.")] = False,
-    resume_run: Annotated[str | None, typer.Option("--resume-run", help="Resume a run ID from state-root.")] = None,
+    resume_run: Annotated[
+        str | None,
+        typer.Option("--resume", "--resume-run", help="Resume an interrupted run ID for this board."),
+    ] = None,
     allow_repeat_reason: Annotated[
         str | None,
         typer.Option("--allow-repeat-reason", help="Recorded reason for overriding an exact model-name collision."),
     ] = None,
-    production: Annotated[
-        bool,
-        typer.Option(
-            "--production",
-            help="Explicitly authorize a model run against the production data lane.",
-        ),
-    ] = False,
     images: Annotated[
         Literal["auto", "enable", "disable"],
         typer.Option(
@@ -1167,13 +1243,9 @@ def run_model(
 ) -> None:
     """Start or resume a controlled model visit in the terminal."""
 
+    data_repo = _resolve_board_argument(board, legacy_data_repo)
+    state_root = _resolve_cli_state_root(data_repo, state_root, board_config=board_config)
     site = load_archive(data_repo).site
-    if site.environment == "production" and not production:
-        raise typer.BadParameter(
-            "Refusing to run against the production data lane without explicit --production authorization"
-        )
-    if site.environment == "lab" and production:
-        raise typer.BadParameter("--production cannot be used with a lab data repository")
     if resume_run:
         if board_config is not None:
             raise typer.BadParameter("A resumed run uses its persisted board package; omit --board-config")
@@ -1240,6 +1312,7 @@ def run_model(
                 raise typer.BadParameter("--system-prompt-file must not contain NUL characters")
         if selected_provider == "openrouter":
             catalog = asyncio.run(fetch_openrouter_model(model))
+            inferred_display_name = catalog.display_name
             endpoint_catalog = (
                 asyncio.run(fetch_openrouter_endpoint(model, openrouter_provider)) if openrouter_provider else None
             )
@@ -1284,6 +1357,7 @@ def run_model(
             endpoint = None
         elif selected_provider == "anthropic":
             catalog_model = anthropic_model(model)
+            inferred_display_name = catalog_model.name
             catalog_context_window = catalog_model.contextWindow
             catalog_max_completion = catalog_model.maxTokens
             catalog_input_modalities = list(catalog_model.input)
@@ -1313,6 +1387,7 @@ def run_model(
                 asyncio.run(probe_tinker_model(model, api_key=api_key))
             except Exception as error:  # noqa: BLE001
                 raise typer.BadParameter(f"Tinker route probe failed for {model}: {error}") from error
+            inferred_display_name = catalog_model.name
             catalog_context_window = catalog_model.contextWindow
             catalog_max_completion = catalog_model.maxTokens
             catalog_input_modalities = list(catalog_model.input)
@@ -1352,6 +1427,7 @@ def run_model(
                 catalog_model = amazon_bedrock_model(model, region=selected_region)
             except ValueError as error:
                 raise typer.BadParameter(str(error)) from error
+            inferred_display_name = catalog_model.name
             catalog_context_window = BEDROCK_CONTEXT_WINDOW
             catalog_max_completion = catalog_model.maxTokens
             catalog_input_modalities = list(catalog_model.input)
@@ -1400,6 +1476,7 @@ def run_model(
                 endpoint=os.environ.get("GOOGLE_AGENT_PLATFORM_ENDPOINT") or "openapi",
             )
             catalog_context_window = GROK_4_1_FAST_CONTEXT_WINDOW
+            inferred_display_name = "Grok 4.1 Fast Reasoning"
             catalog_max_completion = None
             catalog_input_modalities = ["text", "image"]
             catalog_image_input = True
@@ -1418,6 +1495,7 @@ def run_model(
             openrouter_routing_configuration = None
             amazon_bedrock_routing_configuration = None
 
+        effective_display_name = display_name or inferred_display_name
         image_input_supported = catalog_image_input if image_input == "auto" else image_input == "allow"
         image_capabilities_enabled = _resolve_image_policy(images, image_input_supported)
         effective_generated_images = max_generated_images
@@ -1436,7 +1514,7 @@ def run_model(
             data_repo=data_repo,
             state_root=state_root,
             model_id=model,
-            display_name=display_name,
+            display_name=effective_display_name,
             generation=generation,
             lineage=lineage,
             mode=mode,
@@ -1500,6 +1578,7 @@ def run_model(
                     "state": str(run_dir),
                     "status": "ready",
                     "provider": selected_provider,
+                    "display_name": effective_display_name,
                     "model_context_window": catalog_context_window,
                     "model_max_completion_tokens": catalog_max_completion,
                     "output_tokens_per_turn": effective_output_tokens,

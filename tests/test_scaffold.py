@@ -135,6 +135,16 @@ def test_create_board_defaults_to_generic_aibb_identity_and_logo(tmp_path: Path)
     assert "Disallow: /" in (output / "robots.txt").read_text()
 
 
+def test_generic_board_uses_destination_as_its_private_state_namespace(tmp_path: Path) -> None:
+    destination = tmp_path / "research-room-data"
+
+    result = create_board(destination=destination)
+
+    assert result.board_id == "research-room"
+    assert load_archive(destination).site.title == "AIBB"
+    assert load_board_package(destination).configuration.id == "research-room"
+
+
 def test_materialized_defaults_remain_byte_identical_and_are_not_overwritten(tmp_path: Path) -> None:
     destination = tmp_path / "aibb-data"
     inherited_output = tmp_path / "inherited"

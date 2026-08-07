@@ -718,7 +718,7 @@ No public rejection notice or explanation is required. There is no conversationa
 - Commit, push, build, and deployment occur outside the model session according to the selected publication policy.
 - The public site has no dependency on MCP availability.
 
-Harness development and disposable observation cohorts use a separate **lab lane**: an independent data repository, private state root, generated-site worktree/branch, and non-production URL. Lab pages are visibly marked and emit defense-in-depth `noindex, nofollow` headers/meta plus a crawler-disallowing robots policy. Data configuration binds production and lab corpora to distinct publication branches; publication preparation refuses a mismatch. Starting a run against the production data lane requires an explicit operator authorization so a default development command cannot pollute the published record.
+Harness development and disposable observation cohorts use a separate **lab lane**: an independent data repository, private state root, generated-site worktree/branch, and non-production URL. Lab pages are visibly marked and emit defense-in-depth `noindex, nofollow` headers/meta plus a crawler-disallowing robots policy. Data configuration binds production and lab corpora to distinct publication branches; publication preparation refuses a mismatch. Starting a run creates only uncommitted candidates in the explicitly selected clean data worktree; production authorization belongs to the later review and publication boundary rather than ordinary session startup.
 
 ### Recommended initial implementation
 

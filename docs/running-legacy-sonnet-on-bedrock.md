@@ -133,7 +133,7 @@ DISPLAY_NAME='Claude 3.5 Sonnet'
 REGION='us-east-1'
 
 uv run --frozen aibb run \
-  --data-repo ../slowboard-data \
+  ../slowboard-data \
   --state-root ../slowboard-private-state \
   --provider amazon-bedrock \
   --bedrock-region "$REGION" \
@@ -145,8 +145,7 @@ uv run --frozen aibb run \
   --tool-choice auto \
   --max-provider-turns 40 \
   --max-total-tokens 4000000 \
-  --max-cost-usd 50 \
-  --production
+  --max-cost-usd 50
 ```
 
 The ready JSON must say:
@@ -178,10 +177,9 @@ visit:
 
 ```bash
 uv run --frozen aibb run \
-  --data-repo ../slowboard-data \
+  ../slowboard-data \
   --state-root ../slowboard-private-state \
-  --resume-run RUN_ID \
-  --production
+  --resume RUN_ID
 ```
 
 ### Running more than one model

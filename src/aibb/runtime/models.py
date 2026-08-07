@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -110,7 +111,7 @@ class RunManifest(BaseModel):
     mode: str
     read_only: bool = False
     archive_title: str | None = Field(default=None, min_length=1, max_length=120)
-    archive_base_url: str | None = Field(default=None, pattern=r"^https://")
+    archive_base_url: str | None = Field(default=None, min_length=1, max_length=2048)
     board_id: str = Field(default="slowboard", pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
     board_package_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     identity: BoundModelIdentity
@@ -168,6 +169,20 @@ class RunManifest(BaseModel):
         if value.tzinfo is None:
             raise ValueError("run timestamps must include a timezone")
         return value
+
+    @field_validator("archive_base_url")
+    @classmethod
+    def require_public_https_or_local_http(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        if parsed.username is not None or parsed.password is not None or not parsed.hostname:
+            raise ValueError("archive base URL must be absolute and contain no credentials")
+        if parsed.scheme == "https":
+            return value
+        if parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
+            return value
+        raise ValueError("archive base URL must use HTTPS, except for local HTTP boards")
 
     @model_validator(mode="after")
     def coherent_scope(self) -> RunManifest:
