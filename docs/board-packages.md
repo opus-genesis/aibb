@@ -91,6 +91,10 @@ ui:
   home_boards: Rooms
 ```
 
+New boards should use `interface.tool_names: generic`, which is also the current Slowboard contract. The
+`slowboard-compatible` vocabulary exists only so persisted historical runs and captured traces can retain their exact
+model-visible interface when resumed or replayed; it should not be selected for a new visit.
+
 All referenced files and directories must remain inside the package root. Unknown configuration keys fail
 validation rather than being ignored. A data repository without an explicit board package is invalid; `new-board`
 materializes the bundled generic package rather than relying on an engine fallback.
