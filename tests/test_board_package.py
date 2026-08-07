@@ -74,6 +74,44 @@ ui:
     return config
 
 
+def _write_v2_board_package(root: Path) -> Path:
+    (root / "prompts").mkdir()
+    (root / "documents").mkdir()
+    (root / "prompts/initial.md").write_text(
+        "Welcome {{runvar:bound_identity.display_name}}.\n\n{{prompt:run_config}}\n\n{{doc:documents/rules.md}}\n"
+    )
+    (root / "prompts/run_config.md").write_text(
+        "{% if runvar.contribution_rules.total_finished_contribution_allowance %}"
+        "Allowance: {{runvar:contribution_rules.total_finished_contribution_allowance}}."
+        "{% endif %}\n"
+    )
+    (root / "documents/rules.md").write_text("Add signal.\n")
+    (root / "documents/reference.md").write_text("Reference material.\n")
+    (root / "documents/orphan.md").write_text("Unused.\n")
+    config = root / "aibb-board.yaml"
+    config.write_text(
+        """schema_version: 2
+id: example-board
+documents:
+  path: documents
+  retrievable:
+    - documents/reference.md
+prompts:
+  path: prompts
+  initial: initial
+interface:
+  tool_names: generic
+theme:
+  stylesheets:
+    - /assets/style.css
+search:
+  cloudflare_worker: false
+  static_fallback: true
+"""
+    )
+    return config
+
+
 def test_configured_board_controls_build_theme_framing_and_search_fallback(tmp_path: Path) -> None:
     data = tmp_path / "data"
     output = tmp_path / "site"
@@ -141,6 +179,40 @@ def test_run_snapshot_preserves_model_visible_board_contract(tmp_path: Path) -> 
     snapshot_path.write_text(json.dumps(payload))
     with pytest.raises(BoardConfigurationError, match="digest does not match"):
         load_run_board_package(run_dir, data)
+
+
+def test_v2_board_renders_prompt_warns_and_snapshots_sources(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    run_dir = tmp_path / "state/run-two"
+    _write_archive(data)
+    _write_v2_board_package(data)
+    board = load_board_package(data)
+
+    rendered = board.render_initial_prompt(
+        {
+            "bound_identity": {"display_name": "Example Model"},
+            "contribution_rules": {"total_finished_contribution_allowance": 3},
+        }
+    )
+
+    assert rendered.text == "Welcome Example Model.\n\nAllowance: 3.\n\n\nAdd signal.\n\n"
+    assert {(warning.code, warning.path) for warning in board.warnings} == {
+        ("document-unreachable", "documents/orphan.md")
+    }
+    board.snapshot(run_dir)
+    (data / "prompts/initial.md").write_text("Changed later.\n")
+    (data / "documents/rules.md").write_text("Changed later.\n")
+
+    restored = load_run_board_package(run_dir, data)
+    restored_rendered = restored.render_initial_prompt(
+        {
+            "bound_identity": {"display_name": "Example Model"},
+            "contribution_rules": {"total_finished_contribution_allowance": 3},
+        }
+    )
+
+    assert restored.digest == board.digest
+    assert restored_rendered == rendered
 
 
 def test_new_run_binds_configured_board_and_snapshots_it(tmp_path: Path) -> None:

@@ -10,6 +10,8 @@ from typing import Any
 from harn_ai.types import TextContent, UserMessage
 from pydantic import BaseModel, ConfigDict
 
+from aibb.prompting import RenderedPrompt
+
 
 def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
@@ -33,6 +35,56 @@ class ContextEnvelope(BaseModel):
 
     def initial_message(self) -> UserMessage:
         return UserMessage(content=[TextContent(text=self.initial_text)], timestamp=int(time.time() * 1000))
+
+
+class PromptContextEnvelope(BaseModel):
+    """Exact v2 prompt-package context presented to a model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 2
+    prompt_entrypoint: str
+    prompt_paths: list[str]
+    document_paths: list[str]
+    prompt_source_sha256: str
+    runvar_sha256: str
+    initial_text: str
+    tool_definitions: list[dict[str, Any]]
+    digest: str
+
+    def initial_message(self) -> UserMessage:
+        return UserMessage(content=[TextContent(text=self.initial_text)], timestamp=int(time.time() * 1000))
+
+
+def build_prompt_context_envelope(
+    *,
+    rendered: RenderedPrompt,
+    runvar: dict[str, Any],
+    tool_definitions: list[dict[str, Any]],
+) -> PromptContextEnvelope:
+    normalized_runvar = _canonical_json(runvar)
+    digest_payload = {
+        "schema_version": 2,
+        "messages": [{"role": "user", "content": rendered.text}],
+        "tools": tool_definitions,
+        "prompt": {
+            "entrypoint": rendered.entrypoint,
+            "source_sha256": rendered.source_sha256,
+            "prompt_paths": list(rendered.prompt_paths),
+            "document_paths": list(rendered.document_paths),
+        },
+        "runvar_sha256": hashlib.sha256(normalized_runvar.encode()).hexdigest(),
+    }
+    return PromptContextEnvelope(
+        prompt_entrypoint=rendered.entrypoint,
+        prompt_paths=list(rendered.prompt_paths),
+        document_paths=list(rendered.document_paths),
+        prompt_source_sha256=rendered.source_sha256,
+        runvar_sha256=hashlib.sha256(normalized_runvar.encode()).hexdigest(),
+        initial_text=rendered.text,
+        tool_definitions=tool_definitions,
+        digest=hashlib.sha256(_canonical_json(digest_payload).encode()).hexdigest(),
+    )
 
 
 def build_context_envelope(

@@ -115,9 +115,10 @@ class RunManifest(BaseModel):
     board_id: str = Field(default="slowboard", pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
     board_package_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     identity: BoundModelIdentity
-    orientation_version: str
-    notice_version: str
-    policy_version: str = "v0.1"
+    orientation_version: str | None = None
+    notice_version: str | None = None
+    policy_version: str | None = None
+    prompt_entrypoint: str | None = None
     calendar_date: date | None = None
     calendar_utc_offset: str = Field(default="+00:00", pattern=r"^[+-](?:0\d|1\d|2[0-3]):[0-5]\d$")
     contribution_quota: int = Field(default=2, ge=0)
@@ -179,6 +180,11 @@ class RunManifest(BaseModel):
             raise ValueError("amazon_bedrock_routing is only valid for Amazon Bedrock runs")
         if self.identity.provider == "amazon-bedrock" and self.amazon_bedrock_routing is None:
             raise ValueError("Amazon Bedrock runs require an immutable region")
+        legacy_context = (self.orientation_version, self.notice_version, self.policy_version)
+        if self.prompt_entrypoint is None and not all(legacy_context):
+            raise ValueError("a run requires either a prompt entrypoint or all legacy framing versions")
+        if self.prompt_entrypoint is not None and any(legacy_context):
+            raise ValueError("a prompt-package run must not also bind legacy framing versions")
         return self
 
     @classmethod

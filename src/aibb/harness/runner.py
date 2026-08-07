@@ -20,13 +20,13 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
-from aibb.board import load_board_package
+from aibb.board import load_board_package, load_run_board_package
 from aibb.domain import load_archive
 from aibb.harness.amazon_bedrock import AmazonBedrockAdapter, amazon_bedrock_model
 from aibb.harness.anthropic import ANTHROPIC_ENDPOINT, AnthropicAdapter, anthropic_model
 from aibb.harness.catalog import fetch_openrouter_endpoint, fetch_openrouter_model
 from aibb.harness.compaction import COMPACTION_NOTICE_VERSION, compact_archive_results, estimate_message_tokens
-from aibb.harness.context import build_context_envelope
+from aibb.harness.context import build_context_envelope, build_prompt_context_envelope
 from aibb.harness.engine import AibbHarnessEngine, EngineSnapshot
 from aibb.harness.google_agent_platform import GoogleAgentPlatformAdapter, google_agent_platform_model
 from aibb.harness.openrouter import OpenRouterAdapter, openrouter_model
@@ -258,9 +258,18 @@ def create_run_manifest(
             public_author_id=author_id,
             display_name=display_name,
         ),
-        orientation_version=board.configuration.framing.orientation.version,
-        notice_version=board.configuration.framing.notice.version,
-        policy_version=board.configuration.framing.policy.version,
+        orientation_version=(
+            board.configuration.framing.orientation.version if board.configuration.framing is not None else None
+        ),
+        notice_version=(
+            board.configuration.framing.notice.version if board.configuration.framing is not None else None
+        ),
+        policy_version=(
+            board.configuration.framing.policy.version if board.configuration.framing is not None else None
+        ),
+        prompt_entrypoint=(
+            board.configuration.prompts.initial if board.configuration.prompts is not None else None
+        ),
         calendar_date=local_now.date(),
         calendar_utc_offset=calendar_utc_offset,
         contribution_quota=contribution_quota,
@@ -887,23 +896,49 @@ async def run_model_visit(
             store.write_checkpoint(engine.snapshot())
             context_digest = store.read_events()[0].payload.get("context_digest", "restored")
         else:
-            orientation = await bridge.read_text_resource(f"aibb://orientation/{manifest.orientation_version}")
-            notice = await bridge.read_text_resource(f"aibb://notice/{manifest.notice_version}")
-            policy = await bridge.read_text_resource(f"aibb://policy/{manifest.policy_version}")
             scope = await bridge.read_text_resource("aibb://run/current")
-            envelope = build_context_envelope(
-                orientation_version=manifest.orientation_version,
-                orientation=orientation,
-                notice_version=manifest.notice_version,
-                notice=notice,
-                policy_version=manifest.policy_version,
-                policy=policy,
-                run_scope=scope,
-                tool_definitions=_tool_definitions(tools),
-                archive_title=_archive_title(manifest),
-                system_prompt_label=manifest.system_prompt.label if manifest.system_prompt else None,
-                system_prompt_source_url=manifest.system_prompt.source_url if manifest.system_prompt else None,
-            )
+            if manifest.prompt_entrypoint is not None:
+                board = load_run_board_package(run_dir, data_repo)
+                runvar = json.loads(scope)
+                rendered = board.render_initial_prompt(runvar)
+                envelope = build_prompt_context_envelope(
+                    rendered=rendered,
+                    runvar=runvar,
+                    tool_definitions=_tool_definitions(tools),
+                )
+                _atomic_write_json(
+                    run_dir / "board/prompt-render.json",
+                    {
+                        "schema_version": 1,
+                        "entrypoint": rendered.entrypoint,
+                        "prompt_paths": list(rendered.prompt_paths),
+                        "document_paths": list(rendered.document_paths),
+                        "source_sha256": rendered.source_sha256,
+                        "rendered_sha256": rendered.rendered_sha256,
+                        "runvar": runvar,
+                        "rendered_text": rendered.text,
+                    },
+                )
+            else:
+                assert manifest.orientation_version is not None
+                assert manifest.notice_version is not None
+                assert manifest.policy_version is not None
+                orientation = await bridge.read_text_resource(f"aibb://orientation/{manifest.orientation_version}")
+                notice = await bridge.read_text_resource(f"aibb://notice/{manifest.notice_version}")
+                policy = await bridge.read_text_resource(f"aibb://policy/{manifest.policy_version}")
+                envelope = build_context_envelope(
+                    orientation_version=manifest.orientation_version,
+                    orientation=orientation,
+                    notice_version=manifest.notice_version,
+                    notice=notice,
+                    policy_version=manifest.policy_version,
+                    policy=policy,
+                    run_scope=scope,
+                    tool_definitions=_tool_definitions(tools),
+                    archive_title=_archive_title(manifest),
+                    system_prompt_label=manifest.system_prompt.label if manifest.system_prompt else None,
+                    system_prompt_source_url=manifest.system_prompt.source_url if manifest.system_prompt else None,
+                )
             store.append(
                 "run_created",
                 {

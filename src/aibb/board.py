@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+
+from aibb.prompting import PromptPackage, PromptWarning, RenderedPrompt
 
 BOARD_CONFIG_NAME = "aibb-board.yaml"
 BOARD_SNAPSHOT_PATH = "board/package.json"
@@ -34,6 +36,20 @@ class FramingConfiguration(BaseModel):
     orientation: FramingDocumentConfiguration
     notice: FramingDocumentConfiguration
     policy: FramingDocumentConfiguration
+
+
+class DocumentsConfiguration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(default="documents", min_length=1, max_length=500)
+    retrievable: list[str] = Field(default_factory=list, max_length=500)
+
+
+class PromptsConfiguration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(default="prompts", min_length=1, max_length=500)
+    initial: str = Field(min_length=1, max_length=500)
 
 
 class ThemeConfiguration(BaseModel):
@@ -85,13 +101,29 @@ class BoardConfiguration(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 2
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
-    framing: FramingConfiguration
+    framing: FramingConfiguration | None = None
+    documents: DocumentsConfiguration | None = None
+    prompts: PromptsConfiguration | None = None
     interface: InterfaceConfiguration = Field(default_factory=InterfaceConfiguration)
     theme: ThemeConfiguration = Field(default_factory=ThemeConfiguration)
     search: SearchConfiguration = Field(default_factory=SearchConfiguration)
     ui: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_versioned_context_configuration(self) -> BoardConfiguration:
+        if self.schema_version == 1:
+            if self.framing is None:
+                raise ValueError("schema_version 1 requires framing")
+            if self.documents is not None or self.prompts is not None:
+                raise ValueError("schema_version 1 does not support documents or prompts")
+        else:
+            if self.framing is not None:
+                raise ValueError("schema_version 2 replaces framing with documents and prompts")
+            if self.documents is None or self.prompts is None:
+                raise ValueError("schema_version 2 requires documents and prompts")
+        return self
 
     @field_validator("ui")
     @classmethod
@@ -111,9 +143,9 @@ class BoardSnapshot(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 2
     configuration: BoardConfiguration
-    framing_documents: dict[Literal["orientation", "notice", "policy"], str]
+    framing_documents: dict[Literal["orientation", "notice", "policy"], str] = Field(default_factory=dict)
     digest: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
@@ -156,6 +188,7 @@ class BoardPackage:
     configuration: BoardConfiguration
     root: Path
     framing_documents: dict[str, str]
+    prompt_package: PromptPackage | None = None
     templates_dir: Path | None = None
     assets_dir: Path | None = None
     source: Path | None = None
@@ -166,10 +199,23 @@ class BoardPackage:
 
     @property
     def digest(self) -> str:
-        return _snapshot_digest(self.configuration, self.framing_documents)
+        return _snapshot_digest(self.configuration, self.framing_documents, self.prompt_package)
+
+    @property
+    def warnings(self) -> tuple[PromptWarning, ...]:
+        if self.prompt_package is None or self.configuration.prompts is None:
+            return ()
+        return tuple(self.prompt_package.warnings([self.configuration.prompts.initial]))
 
     def framing_document(self, kind: Literal["orientation", "notice", "policy"]) -> str:
+        if self.configuration.schema_version != 1:
+            raise BoardConfigurationError("Framing documents are only available in legacy board packages")
         return self.framing_documents[kind]
+
+    def render_initial_prompt(self, runvar: dict[str, object]) -> RenderedPrompt:
+        if self.prompt_package is None or self.configuration.prompts is None:
+            raise BoardConfigurationError("This legacy board package does not define a prompt entrypoint")
+        return self.prompt_package.render(self.configuration.prompts.initial, runvar=runvar)
 
     def snapshot(self, run_dir: Path) -> Path:
         snapshot = BoardSnapshot(
@@ -179,6 +225,15 @@ class BoardPackage:
         )
         path = run_dir / BOARD_SNAPSHOT_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
+        if self.prompt_package is not None:
+            files_root = path.parent / "files"
+            for relative, body in {
+                **self.prompt_package.prompts,
+                **self.prompt_package.documents,
+            }.items():
+                destination = files_root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(body, encoding="utf-8")
         path.write_text(snapshot.model_dump_json(indent=2) + "\n", encoding="utf-8")
         return path
 
@@ -187,10 +242,22 @@ def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
-def _snapshot_digest(configuration: BoardConfiguration, framing_documents: dict[str, str]) -> str:
+def _snapshot_digest(
+    configuration: BoardConfiguration,
+    framing_documents: dict[str, str],
+    prompt_package: PromptPackage | None = None,
+) -> str:
+    if configuration.schema_version == 1:
+        payload = {
+            "configuration": configuration.model_dump(mode="json"),
+            "framing_documents": framing_documents,
+        }
+        return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
     payload = {
         "configuration": configuration.model_dump(mode="json"),
-        "framing_documents": framing_documents,
+        "prompts": prompt_package.prompts if prompt_package else {},
+        "documents": prompt_package.documents if prompt_package else {},
+        "retrievable_documents": sorted(prompt_package.retrievable) if prompt_package else [],
     }
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
@@ -222,15 +289,29 @@ def _load_configuration(path: Path) -> BoardConfiguration:
 
 def _package_from_configuration(configuration: BoardConfiguration, *, root: Path, source: Path | None) -> BoardPackage:
     framing_documents: dict[str, str] = {}
-    for kind in ("orientation", "notice", "policy"):
-        reference = getattr(configuration.framing, kind)
-        path = _resolve_package_path(root, reference.path, kind=f"{kind} framing", directory=False)
-        assert path is not None
-        framing_documents[kind] = path.read_text(encoding="utf-8").strip() + "\n"
+    prompt_package = None
+    if configuration.schema_version == 1:
+        assert configuration.framing is not None
+        for kind in ("orientation", "notice", "policy"):
+            reference = getattr(configuration.framing, kind)
+            path = _resolve_package_path(root, reference.path, kind=f"{kind} framing", directory=False)
+            assert path is not None
+            framing_documents[kind] = path.read_text(encoding="utf-8").strip() + "\n"
+    else:
+        assert configuration.documents is not None
+        assert configuration.prompts is not None
+        prompt_package = PromptPackage(
+            root,
+            prompts_root=configuration.prompts.path,
+            documents_root=configuration.documents.path,
+            retrievable=configuration.documents.retrievable,
+        )
+        prompt_package.warnings([configuration.prompts.initial])
     return BoardPackage(
         configuration=configuration,
         root=root,
         framing_documents=framing_documents,
+        prompt_package=prompt_package,
         templates_dir=_resolve_package_path(root, configuration.theme.templates, kind="templates", directory=True),
         assets_dir=_resolve_package_path(root, configuration.theme.assets, kind="assets", directory=True),
         source=source,
@@ -240,6 +321,7 @@ def _package_from_configuration(configuration: BoardConfiguration, *, root: Path
 def _slowboard_compatibility_package() -> BoardPackage:
     project_root = Path(__file__).resolve().parents[2]
     configuration = BoardConfiguration(
+        schema_version=1,
         id="slowboard",
         framing=FramingConfiguration(
             orientation=FramingDocumentConfiguration(
@@ -318,12 +400,23 @@ def load_run_board_package(run_dir: Path, data_repo: Path) -> BoardPackage:
         snapshot = BoardSnapshot.model_validate_json(path.read_text(encoding="utf-8"))
     except (OSError, ValidationError) as error:
         raise BoardConfigurationError(f"Invalid run board snapshot {path}: {error}") from error
-    expected = _snapshot_digest(snapshot.configuration, snapshot.framing_documents)
+    prompt_package = None
+    if snapshot.configuration.schema_version == 2:
+        assert snapshot.configuration.documents is not None
+        assert snapshot.configuration.prompts is not None
+        prompt_package = PromptPackage(
+            path.parent / "files",
+            prompts_root=snapshot.configuration.prompts.path,
+            documents_root=snapshot.configuration.documents.path,
+            retrievable=snapshot.configuration.documents.retrievable,
+        )
+    expected = _snapshot_digest(snapshot.configuration, snapshot.framing_documents, prompt_package)
     if snapshot.digest != expected:
         raise BoardConfigurationError("Run board snapshot digest does not match its content")
     return BoardPackage(
         configuration=snapshot.configuration,
         root=path.parent,
         framing_documents=dict(snapshot.framing_documents),
+        prompt_package=prompt_package,
         source=path,
     )

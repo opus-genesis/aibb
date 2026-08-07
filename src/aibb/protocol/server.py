@@ -810,22 +810,7 @@ def create_server(
 
     @server.list_resources()
     async def list_resources() -> list[types.Resource]:
-        return [
-            types.Resource(
-                uri=f"aibb://orientation/{state.manifest.orientation_version}",
-                name="Contributor orientation",
-                mimeType="text/markdown",
-            ),
-            types.Resource(
-                uri=f"aibb://notice/{state.manifest.notice_version}",
-                name="Operational notice",
-                mimeType="text/markdown",
-            ),
-            types.Resource(
-                uri=f"aibb://policy/{state.manifest.policy_version}",
-                name="Contribution policy",
-                mimeType="text/markdown",
-            ),
+        resources = [
             types.Resource(uri="aibb://about", name=f"About {archive_title}", mimeType="text/markdown"),
             types.Resource(uri="aibb://run/current", name="Current run scope", mimeType="application/json"),
             types.Resource(
@@ -834,17 +819,41 @@ def create_server(
                 mimeType="text/yaml",
             ),
         ]
+        if state.manifest.prompt_entrypoint is None:
+            resources[0:0] = [
+                types.Resource(
+                    uri=f"aibb://orientation/{state.manifest.orientation_version}",
+                    name="Contributor orientation",
+                    mimeType="text/markdown",
+                ),
+                types.Resource(
+                    uri=f"aibb://notice/{state.manifest.notice_version}",
+                    name="Operational notice",
+                    mimeType="text/markdown",
+                ),
+                types.Resource(
+                    uri=f"aibb://policy/{state.manifest.policy_version}",
+                    name="Contribution policy",
+                    mimeType="text/markdown",
+                ),
+            ]
+        return resources
 
     @server.read_resource()
     async def read_resource(uri: object) -> list[ReadResourceContents]:
         value = str(uri)
-        if value == f"aibb://orientation/{state.manifest.orientation_version}":
+        if state.manifest.orientation_version is not None and value == (
+            f"aibb://orientation/{state.manifest.orientation_version}"
+        ):
             text = board.framing_document("orientation")
             return [ReadResourceContents(text, "text/markdown")]
-        if value == f"aibb://notice/{state.manifest.notice_version}":
+        if state.manifest.notice_version is not None and value == f"aibb://notice/{state.manifest.notice_version}":
             text = board.framing_document("notice")
             return [ReadResourceContents(text, "text/markdown")]
-        if value in {"aibb://policy/current", f"aibb://policy/{state.manifest.policy_version}"}:
+        if state.manifest.policy_version is not None and value in {
+            "aibb://policy/current",
+            f"aibb://policy/{state.manifest.policy_version}",
+        }:
             text = board.framing_document("policy")
             return [ReadResourceContents(text, "text/markdown")]
         if value == "aibb://about":
@@ -939,11 +948,15 @@ def create_server(
                 "calendar_utc_offset": state.manifest.calendar_utc_offset,
                 "expiry": state.manifest.expires_at.isoformat(),
                 "read_only": state.read_only,
-                "context_versions": {
-                    "orientation": state.manifest.orientation_version,
-                    "notice": state.manifest.notice_version,
-                    "policy": state.manifest.policy_version,
-                },
+                "context_versions": (
+                    {"prompt_entrypoint": state.manifest.prompt_entrypoint}
+                    if state.manifest.prompt_entrypoint is not None
+                    else {
+                        "orientation": state.manifest.orientation_version,
+                        "notice": state.manifest.notice_version,
+                        "policy": state.manifest.policy_version,
+                    }
+                ),
                 "additional_actions": {
                     **(
                         {
