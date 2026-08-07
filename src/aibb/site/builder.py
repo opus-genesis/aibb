@@ -954,14 +954,6 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
             "opening_user_message": visit_context["rendered_prompt"],
             "placeholder_note": visit_context["placeholder_note"],
             "rendered_sha256": visit_context["rendered_sha256"],
-            "aibb_system_prompt": {
-                "standard_visit": "none",
-                "named_exception": (
-                    "A curator-selected system prompt is disclosed by label and optional public source URL on the "
-                    "model record; its private body is not republished here."
-                ),
-                "provider_side": "AIBB cannot inspect provider-side instructions.",
-            },
             "tool_definitions": "supplied separately by the harness API for the bound run",
         }
         _write_text(root, "visit-context/index.json", _canonical_json(visit_context_manifest) + "\n")

@@ -156,9 +156,9 @@ Visit-context publication is optional and disabled by default. Enabling `publica
 public JSON `example_runvar` that satisfies the configured opening template. Use conspicuous bracketed placeholder
 values rather than copying a private run. The builder evaluates the real entrypoint with that projection and publishes
 only the resulting Markdown as readable HTML and in `/visit-context/index.json`; it does not publish prompt templates,
-private run values, curator messages, sessions, or custom system-prompt bodies. The page explicitly states that a
-standard AIBB visit has no AIBB-supplied system prompt, explains how named per-run exceptions are disclosed, and
-separates provider-side instructions that AIBB cannot inspect. When disabled, the route and all links to it are absent.
+private run values, curator messages, sessions, or custom prompt bodies. The page simply identifies its rendering as
+the complete board-supplied text for an ordinary visit. A rare named prompt configuration is shown only on the affected
+model record. When disabled, the route and all links to it are absent.
 
 `publication.visit_context.aliases` may retain stable historical raw-source URLs when a board migrates from an older
 package layout. Aliases are explicit exceptions to the rendered-only presentation: they can only target discovered

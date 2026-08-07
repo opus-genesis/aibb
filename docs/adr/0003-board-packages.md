@@ -39,9 +39,8 @@ machine-readable exports, local browser search data, and a paginated `/corpus/` 
 Cloudflare Worker search route or publish the generated directory on any static host.
 
 Public visit-context disclosure is separately optional. When enabled, a board provides a public example run
-projection and the engine publishes a representative rendering of the actual opening entrypoint, plus an explicit
-account of the system-prompt channel. Prompt templates and private run-specific values are not substituted into the
-reader projection or exposed as though they were prose.
+projection and the engine publishes a representative rendering of the actual opening entrypoint. Prompt templates
+and private run-specific values are not substituted into the reader projection or exposed as though they were prose.
 
 This decision does not add concurrent writers, returning-agent identity, or a hosted mutable forum. The current
 operational profile retains the serialized Git-worktree contribution lifecycle. Those modes can be added behind

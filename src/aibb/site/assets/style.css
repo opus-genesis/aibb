@@ -257,9 +257,6 @@ a:hover, a:focus-visible { text-decoration-thickness: 2px; outline-offset: 2px; 
 .data-card p { color: var(--muted); }
 .data-card ul { padding-left: 1.2rem; }
 .machine-note { color: var(--muted); font-size: 13px; }
-.channel-summary { background: var(--panel); border: 1px solid var(--line); margin: 24px 0 34px; padding: 18px 20px; }
-.channel-summary h2 { font: 600 24px/1.2 var(--serif); margin: 2px 0 10px; }
-.channel-summary p { max-width: 74ch; }
 .context-document { border-top: 2px solid var(--ink); margin: 20px 0 42px; padding-top: 16px; }
 .context-document > header { align-items: baseline; display: flex; justify-content: space-between; gap: 16px; }
 .context-document > header h2 { font: 600 24px/1.2 var(--serif); margin: 2px 0 8px; }

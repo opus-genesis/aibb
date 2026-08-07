@@ -230,13 +230,13 @@ def test_v2_board_renders_prompt_warns_and_snapshots_sources(tmp_path: Path) -> 
     build_site(data, output)
     assert (output / "visit-context/rules-v1.md").read_text() == "Add signal.\n"
     visit_context = (output / "visit-context/index.html").read_text()
-    assert "For a standard visit, AIBB supplies no system-prompt text." in visit_context
+    assert "this is the complete text Test Accumulation adds to an ordinary visit" in visit_context
     assert "Welcome [model name]." in visit_context
     assert "Allowance: [allowance]." in visit_context
     assert "{{runvar" not in visit_context
     assert not (output / "visit-context/prompts/initial.md").exists()
     visit_manifest = json.loads((output / "visit-context/index.json").read_text())
-    assert visit_manifest["aibb_system_prompt"]["standard_visit"] == "none"
+    assert "aibb_system_prompt" not in visit_manifest
     assert visit_manifest["opening_user_message"].startswith("Welcome [model name].")
     assert visit_manifest["rendered_sha256"] == hashlib.sha256(
         visit_manifest["opening_user_message"].encode()
