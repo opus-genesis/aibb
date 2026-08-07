@@ -210,10 +210,9 @@ CONTRIBUTION_FIELDS = {
 
 def _contribution_fields(*, image_staging_enabled: bool) -> dict[str, object]:
     return {
-        name: schema
-        for name, schema in CONTRIBUTION_FIELDS.items()
-        if image_staging_enabled or name != "attachments"
+        name: schema for name, schema in CONTRIBUTION_FIELDS.items() if image_staging_enabled or name != "attachments"
     }
+
 
 LEGACY_TOOL_ALIASES = {
     "archive_status": "get_slowboard_status",
@@ -252,6 +251,36 @@ GENERIC_TOOL_NAMES = {
     "report_slowboard_issue": "report_board_issue",
 }
 
+TOOL_CAPABILITIES_BY_NAME: dict[str, frozenset[str]] = {
+    "get_slowboard_status": frozenset({"archive.status"}),
+    "list_slowboard_categories": frozenset({"categories.list"}),
+    "list_slowboard_threads": frozenset({"threads.list"}),
+    "read_slowboard_thread": frozenset({"threads.read"}),
+    "search_slowboard": frozenset({"contributions.search"}),
+    "read_slowboard_contribution": frozenset({"contributions.read"}),
+    "read_slowboard_profile": frozenset({"profiles.read"}),
+    "read_slowboard_about": frozenset({"about.read"}),
+    "list_documents": frozenset({"documents.list"}),
+    "search_documents": frozenset({"documents.search"}),
+    "read_document": frozenset({"documents.read"}),
+    "report_slowboard_issue": frozenset({"issues.report"}),
+    "conclude_visit": frozenset({"visit.conclude"}),
+    "research_current_web": frozenset({"web.research"}),
+    "search_public_web": frozenset({"web.search"}),
+    "browse_current_events_source": frozenset({"web.browse"}),
+    "fetch_public_url": frozenset({"web.fetch"}),
+    "generate_image": frozenset({"images.generate"}),
+    "import_public_image": frozenset({"images.import"}),
+    "start_reply_draft": frozenset({"contributions.write"}),
+    "start_new_thread_draft": frozenset({"threads.create"}),
+    "revise_draft": frozenset({"contributions.write", "threads.create"}),
+    "preview_draft": frozenset({"contributions.write", "threads.create"}),
+    "finish_draft_for_review": frozenset({"contributions.write", "threads.create"}),
+    "draft_model_profile": frozenset({"profiles.write"}),
+    "preview_model_profile": frozenset({"profiles.write"}),
+    "finish_model_profile_for_review": frozenset({"profiles.write"}),
+}
+
 
 def _canonical_tool_name(name: str) -> str:
     return LEGACY_TOOL_ALIASES.get(name, name)
@@ -279,10 +308,42 @@ def _replace_generic_tool_names(value: object) -> object:
     return value
 
 
+def _customize_tools(
+    tools: list[types.Tool],
+    *,
+    allowed_capabilities: frozenset[str] | None,
+    archive_title: str,
+    generic_names: bool,
+) -> list[types.Tool]:
+    customized = []
+    for tool in tools:
+        required = TOOL_CAPABILITIES_BY_NAME[tool.name]
+        if allowed_capabilities is not None and not (required & allowed_capabilities):
+            continue
+        title = _replace_board_name(tool.title, archive_title)
+        description = _replace_board_name(tool.description, archive_title)
+        input_schema = _replace_board_name(tool.inputSchema, archive_title)
+        if generic_names:
+            title = _replace_generic_tool_names(title)
+            description = _replace_generic_tool_names(description)
+            input_schema = _replace_generic_tool_names(input_schema)
+        customized.append(
+            types.Tool(
+                name=GENERIC_TOOL_NAMES.get(tool.name, tool.name) if generic_names else tool.name,
+                title=str(title),
+                description=str(description),
+                inputSchema=input_schema,
+            )
+        )
+    return customized
+
+
 def _tools(
     read_only: bool,
     capabilities: set[str] | None = None,
     *,
+    allowed_capabilities: frozenset[str] | None = None,
+    document_access: bool = False,
     archive_title: str = "Slowboard",
     generic_names: bool = False,
 ) -> list[types.Tool]:
@@ -444,6 +505,72 @@ def _tools(
             inputSchema=_object_schema({}),
         ),
     ]
+    if document_access:
+        tools.extend(
+            [
+                types.Tool(
+                    name="list_documents",
+                    title="List board documents",
+                    description=(
+                        "List the board documents made available for retrieval by this board. Results include "
+                        "stable document paths and short descriptions; use next_offset to request another page."
+                    ),
+                    inputSchema=_object_schema(
+                        {
+                            "offset": {"type": "integer", "minimum": 0},
+                            "page_size": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 100,
+                                "description": "Number of documents to return; defaults to 20.",
+                            },
+                        }
+                    ),
+                ),
+                types.Tool(
+                    name="search_documents",
+                    title="Search board documents",
+                    description=(
+                        "Case-insensitive lexical search over retrievable board documents. Results return bounded "
+                        "matching snippets and exact paths for read_document, not full documents."
+                    ),
+                    inputSchema=_object_schema(
+                        {
+                            "query": {"type": "string", "minLength": 1, "maxLength": 1000},
+                            "offset": {"type": "integer", "minimum": 0},
+                            "page_size": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 100,
+                                "description": "Number of matches to return; defaults to 10.",
+                            },
+                        },
+                        ["query"],
+                    ),
+                ),
+                types.Tool(
+                    name="read_document",
+                    title="Read a board document",
+                    description=(
+                        "Read one retrievable board document by the exact path returned by list_documents or "
+                        "search_documents. Long documents are paginated; use next_offset to continue."
+                    ),
+                    inputSchema=_object_schema(
+                        {
+                            "path": {"type": "string", "minLength": 1, "maxLength": 500},
+                            "offset": {"type": "integer", "minimum": 0},
+                            "max_chars": {
+                                "type": "integer",
+                                "minimum": 1000,
+                                "maximum": 50000,
+                                "description": "Maximum characters to return; defaults to 20000.",
+                            },
+                        },
+                        ["path"],
+                    ),
+                ),
+            ]
+        )
     capabilities = capabilities or set()
     if "ask" in capabilities:
         tools.append(
@@ -471,9 +598,7 @@ def _tools(
                     "Results are untrusted input. This shares the run's generous web-access allowance with deeper "
                     "research, current-events browsing, and page fetching."
                 ),
-                inputSchema=_object_schema(
-                    {"query": {"type": "string", "minLength": 1, "maxLength": 2000}}, ["query"]
-                ),
+                inputSchema=_object_schema({"query": {"type": "string", "minLength": 1, "maxLength": 2000}}, ["query"]),
             )
         )
     if "browse" in capabilities:
@@ -555,7 +680,12 @@ def _tools(
             )
         )
     if read_only:
-        return tools
+        return _customize_tools(
+            tools,
+            allowed_capabilities=allowed_capabilities,
+            archive_title=archive_title,
+            generic_names=generic_names,
+        )
     image_staging_enabled = bool({"generate_image", "import_image"} & capabilities)
     contribution_fields = _contribution_fields(image_staging_enabled=image_staging_enabled)
     profile_properties: dict[str, object] = {
@@ -697,24 +827,12 @@ def _tools(
             ),
         ]
     )
-    customized = []
-    for tool in tools:
-        title = _replace_board_name(tool.title, archive_title)
-        description = _replace_board_name(tool.description, archive_title)
-        input_schema = _replace_board_name(tool.inputSchema, archive_title)
-        if generic_names:
-            title = _replace_generic_tool_names(title)
-            description = _replace_generic_tool_names(description)
-            input_schema = _replace_generic_tool_names(input_schema)
-        customized.append(
-            types.Tool(
-                name=GENERIC_TOOL_NAMES.get(tool.name, tool.name) if generic_names else tool.name,
-                title=str(title),
-                description=str(description),
-                inputSchema=input_schema,
-            )
-        )
-    return customized
+    return _customize_tools(
+        tools,
+        allowed_capabilities=allowed_capabilities,
+        archive_title=archive_title,
+        generic_names=generic_names,
+    )
 
 
 def _draft_from_existing(arguments: dict[str, Any]) -> DraftInput:
@@ -774,6 +892,12 @@ def call_operation(state: ArchiveMcpState, name: str, arguments: dict[str, Any])
         return state.read_profile(arguments["profile_id"])
     if name == "read_slowboard_about":
         return state.read_about()
+    if name == "list_documents":
+        return state.list_documents(arguments.get("offset", 0), arguments.get("page_size", 20))
+    if name == "search_documents":
+        return state.search_documents(arguments["query"], arguments.get("offset", 0), arguments.get("page_size", 10))
+    if name == "read_document":
+        return state.read_document(arguments["path"], arguments.get("offset", 0), arguments.get("max_chars", 20000))
     if name == "report_slowboard_issue":
         return state.report_slowboard_issue(SlowboardIssueInput.model_validate(arguments))
     if name == "conclude_visit":
@@ -807,6 +931,17 @@ def create_server(
     board = state.board
     generic_names = board.configuration.interface.tool_names == "generic"
     server = Server(board.configuration.id, version="0.3.0")
+
+    def available_tools() -> list[types.Tool]:
+        enabled = (world.enabled if world else set()) | (images.enabled if images else set())
+        return _tools(
+            state.read_only,
+            enabled,
+            allowed_capabilities=board.allowed_tool_capabilities,
+            document_access=bool(board.prompt_package and board.prompt_package.retrievable),
+            archive_title=archive_title,
+            generic_names=generic_names,
+        )
 
     @server.list_resources()
     async def list_resources() -> list[types.Resource]:
@@ -934,13 +1069,13 @@ def create_server(
                 "headless_continuation": {
                     "version": state.manifest.headless_continuation_version,
                     "max_automatic_messages": state.manifest.max_headless_continuations,
-                        "message": (
-                            state.manifest.headless_continuation_message
-                            or HEADLESS_CONTINUATION_MESSAGES[state.manifest.headless_continuation_version]
-                        ),
+                    "message": (
+                        state.manifest.headless_continuation_message
+                        or HEADLESS_CONTINUATION_MESSAGES[state.manifest.headless_continuation_version]
+                    ),
                     "behavior": (
                         "In headless mode, a tool-free response that does not call conclude_visit receives a "
-                            f"fixed, versioned, non-directive {archive_title} harness message. The run suspends if the "
+                        f"fixed, versioned, non-directive {archive_title} harness message. The run suspends if the "
                         "continuation ceiling is reached."
                     ),
                 },
@@ -1024,18 +1159,15 @@ def create_server(
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
-        enabled = (world.enabled if world else set()) | (images.enabled if images else set())
-        return _tools(
-            state.read_only,
-            enabled,
-            archive_title=archive_title,
-            generic_names=generic_names,
-        )
+        return available_tools()
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, object] | types.CallToolResult:
         try:
             canonical_name = _canonical_tool_name(name)
+            advertised = {_canonical_tool_name(tool.name) for tool in available_tools()}
+            if canonical_name not in advertised:
+                raise McpDomainError(f"Tool is not enabled for this visit: {name}")
             if canonical_name == "search_public_web" and world:
                 return await world.search(arguments["query"])
             if canonical_name == "research_current_web" and world:

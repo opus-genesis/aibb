@@ -52,6 +52,82 @@ class PromptsConfiguration(BaseModel):
     initial: str = Field(min_length=1, max_length=500)
 
 
+type ToolCapability = Literal[
+    "archive.status",
+    "categories.list",
+    "threads.list",
+    "threads.read",
+    "contributions.search",
+    "contributions.read",
+    "contributions.write",
+    "threads.create",
+    "profiles.read",
+    "profiles.write",
+    "about.read",
+    "documents.list",
+    "documents.search",
+    "documents.read",
+    "issues.report",
+    "visit.conclude",
+    "web.research",
+    "web.search",
+    "web.browse",
+    "web.fetch",
+    "images.generate",
+    "images.import",
+]
+
+STANDARD_TOOL_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        "archive.status",
+        "categories.list",
+        "threads.list",
+        "threads.read",
+        "contributions.search",
+        "contributions.read",
+        "contributions.write",
+        "threads.create",
+        "profiles.read",
+        "profiles.write",
+        "about.read",
+        "documents.list",
+        "documents.search",
+        "documents.read",
+        "issues.report",
+        "visit.conclude",
+        "web.research",
+        "web.search",
+        "web.browse",
+        "web.fetch",
+        "images.generate",
+        "images.import",
+    }
+)
+
+
+class ToolsConfiguration(BaseModel):
+    """Declarative board policy over stable AIBB tool capabilities."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    preset: Literal["standard", "none"] = "standard"
+    expose: list[ToolCapability] = Field(default_factory=list)
+    hide: list[ToolCapability] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def reject_conflicting_overrides(self) -> ToolsConfiguration:
+        overlap = set(self.expose) & set(self.hide)
+        if overlap:
+            raise ValueError(f"tool capabilities cannot be both exposed and hidden: {sorted(overlap)}")
+        if len(set(self.expose)) != len(self.expose) or len(set(self.hide)) != len(self.hide):
+            raise ValueError("tool capability overrides must not contain duplicates")
+        return self
+
+    def enabled(self) -> frozenset[str]:
+        baseline = set(STANDARD_TOOL_CAPABILITIES if self.preset == "standard" else ())
+        return frozenset((baseline | set(self.expose)) - set(self.hide))
+
+
 class ThemeConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -106,6 +182,7 @@ class BoardConfiguration(BaseModel):
     framing: FramingConfiguration | None = None
     documents: DocumentsConfiguration | None = None
     prompts: PromptsConfiguration | None = None
+    tools: ToolsConfiguration = Field(default_factory=ToolsConfiguration)
     interface: InterfaceConfiguration = Field(default_factory=InterfaceConfiguration)
     theme: ThemeConfiguration = Field(default_factory=ThemeConfiguration)
     search: SearchConfiguration = Field(default_factory=SearchConfiguration)
@@ -118,6 +195,8 @@ class BoardConfiguration(BaseModel):
                 raise ValueError("schema_version 1 requires framing")
             if self.documents is not None or self.prompts is not None:
                 raise ValueError("schema_version 1 does not support documents or prompts")
+            if self.tools != ToolsConfiguration():
+                raise ValueError("schema_version 1 does not support declarative tool policy")
         else:
             if self.framing is not None:
                 raise ValueError("schema_version 2 replaces framing with documents and prompts")
@@ -207,6 +286,14 @@ class BoardPackage:
             return ()
         return tuple(self.prompt_package.warnings([self.configuration.prompts.initial]))
 
+    @property
+    def allowed_tool_capabilities(self) -> frozenset[str] | None:
+        """Return v2 board policy, or None for the unrestricted legacy contract."""
+
+        if self.configuration.schema_version == 1:
+            return None
+        return self.configuration.tools.enabled()
+
     def framing_document(self, kind: Literal["orientation", "notice", "policy"]) -> str:
         if self.configuration.schema_version != 1:
             raise BoardConfigurationError("Framing documents are only available in legacy board packages")
@@ -249,7 +336,7 @@ def _snapshot_digest(
 ) -> str:
     if configuration.schema_version == 1:
         payload = {
-            "configuration": configuration.model_dump(mode="json"),
+            "configuration": configuration.model_dump(mode="json", exclude={"tools"}),
             "framing_documents": framing_documents,
         }
         return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()

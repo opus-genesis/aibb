@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from test_archive_build import _write_archive
+from test_budget import make_manifest
 
 from aibb.board import BoardConfigurationError, load_board_package, load_run_board_package
 from aibb.harness.runner import create_run_manifest
@@ -99,6 +100,11 @@ documents:
 prompts:
   path: prompts
   initial: initial
+tools:
+  preset: standard
+  hide:
+    - web.browse
+    - threads.create
 interface:
   tool_names: generic
 theme:
@@ -215,6 +221,37 @@ def test_v2_board_renders_prompt_warns_and_snapshots_sources(tmp_path: Path) -> 
     assert restored_rendered == rendered
 
 
+def test_v2_board_controls_tools_and_retrievable_documents(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    _write_v2_board_package(data)
+    board = load_board_package(data)
+    state = ArchiveMcpState(data, tmp_path / "state", make_manifest(), read_only=True, board=board)
+
+    tools = _tools(
+        read_only=False,
+        capabilities={"ask", "browse"},
+        allowed_capabilities=board.allowed_tool_capabilities,
+        document_access=True,
+        archive_title="Example Board",
+        generic_names=True,
+    )
+    names = {tool.name for tool in tools}
+    assert {"list_documents", "search_documents", "read_document", "research_current_web"} <= names
+    assert "browse_current_events_source" not in names
+    assert "start_new_thread_draft" not in names
+    assert "start_reply_draft" in names
+
+    listing = state.list_documents()
+    assert listing["page"] == {"offset": 0, "returned": 1, "total": 1, "next_offset": None}
+    assert listing["documents"][0]["path"] == "documents/reference.md"
+    search = state.search_documents("material")
+    assert search["hits"][0]["path"] == "documents/reference.md"
+    document = state.read_document("documents/reference.md")
+    assert document["content"] == "Reference material.\n"
+    assert document["page"]["complete_document"] is True
+
+
 def test_new_run_binds_configured_board_and_snapshots_it(tmp_path: Path) -> None:
     data = tmp_path / "data"
     _write_archive(data)
@@ -267,9 +304,7 @@ def test_new_run_binds_configured_board_and_snapshots_it(tmp_path: Path) -> None
     assert board.digest == manifest.board_package_sha256
     state = ArchiveMcpState(data, run_dir / "mcp", manifest, read_only=True, board=board)
     assert state.list_threads()["retrieve_full_thread_with"] == "read_thread(thread_id)"
-    assert state.read_thread("first")["retrieve_one_contribution_with"] == (
-        "read_contribution(contribution_id)"
-    )
+    assert state.read_thread("first")["retrieve_one_contribution_with"] == ("read_contribution(contribution_id)")
 
 
 def test_board_package_rejects_paths_outside_package_root(tmp_path: Path) -> None:

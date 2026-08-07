@@ -69,6 +69,7 @@ SEARCH_BEHAVIOR = (
     "accepted as an optional compatibility separator."
 )
 SEARCH_EXCERPT_CHARS = 240
+DOCUMENT_EXCERPT_CHARS = 240
 
 
 class NewThreadDraft(BaseModel):
@@ -268,9 +269,7 @@ class ArchiveMcpState:
                     try:
                         existing = json.loads(line)
                     except json.JSONDecodeError as error:
-                        raise McpDomainError(
-                            f"Private board issue log is malformed at line {line_number}"
-                        ) from error
+                        raise McpDomainError(f"Private board issue log is malformed at line {line_number}") from error
                     if existing.get("issue_id") == issue_id:
                         if existing.get("run_id") != self.manifest.run_id or existing.get("text") != issue.text:
                             raise McpDomainError("Private board issue log contains a conflicting issue ID")
@@ -577,9 +576,7 @@ class ArchiveMcpState:
             "thread_states": counts,
             "selected_thread_state": thread_state,
             "page": pagination,
-            "retrieve_full_thread_with": (
-                f"{self._read_tool_name('read_thread', 'read_slowboard_thread')}(thread_id)"
-            ),
+            "retrieve_full_thread_with": (f"{self._read_tool_name('read_thread', 'read_slowboard_thread')}(thread_id)"),
         }
 
     def _thread_result(
@@ -605,9 +602,7 @@ class ArchiveMcpState:
             "remaining_capacity": status.remaining_capacity,
             "last_activity_at": service.last_activity(thread.id).isoformat(),
             "publication_state": (
-                "local_worktree"
-                if f"content/threads/{thread.id}.yaml" in self._worktree_paths()
-                else "published"
+                "local_worktree" if f"content/threads/{thread.id}.yaml" in self._worktree_paths() else "published"
             ),
         }
         if thread.quota_exempt:
@@ -720,9 +715,7 @@ class ArchiveMcpState:
             "bio": profile.bio,
             "author": self._author_result(corpus.authors[profile.author_id]),
             "publication_state": (
-                "local_worktree"
-                if f"content/profiles/{profile.id}.yaml" in self._worktree_paths()
-                else "published"
+                "local_worktree" if f"content/profiles/{profile.id}.yaml" in self._worktree_paths() else "published"
             ),
         }
         if profile.avatar:
@@ -745,6 +738,103 @@ class ArchiveMcpState:
             "canonical_url": corpus.site.base_url.rstrip("/") + "/about/",
             "curator_name": corpus.site.curator_name,
             "curator_profile_id": self._curator_profile_id(corpus),
+        }
+
+    def _retrievable_documents(self) -> dict[str, str]:
+        package = self.board.prompt_package
+        if package is None:
+            return {}
+        return {path: package.documents[path] for path in sorted(package.retrievable)}
+
+    @staticmethod
+    def _document_title(path: str, body: str) -> str:
+        heading = re.search(r"(?m)^#\s+(.+?)\s*$", body)
+        if heading:
+            return heading.group(1).strip()
+        return Path(path).stem.replace("-", " ").replace("_", " ").strip().title()
+
+    @classmethod
+    def _document_summary(cls, body: str) -> str:
+        without_heading = re.sub(r"(?m)^#\s+.+?\s*$", "", body, count=1)
+        return cls._matching_excerpt(without_heading, [], DOCUMENT_EXCERPT_CHARS)
+
+    def list_documents(self, offset: int = 0, page_size: int = 20) -> dict[str, object]:
+        documents = self._retrievable_documents()
+        results = [
+            {
+                "path": path,
+                "title": self._document_title(path, body),
+                "description": self._document_summary(body),
+                "characters": len(body),
+            }
+            for path, body in documents.items()
+        ]
+        page, pagination = self._page(results, offset, page_size)
+        return {
+            "documents": page,
+            "page": pagination,
+            "retrieve_full_with": "read_document(path)",
+        }
+
+    def search_documents(self, query: str, offset: int = 0, page_size: int = 10) -> dict[str, object]:
+        terms = list(dict.fromkeys(re.findall(r"[\w'-]+", query.casefold())))
+        if not terms:
+            raise McpDomainError("Document search query must contain at least one non-whitespace term")
+        matches: list[dict[str, object]] = []
+        for path, body in self._retrievable_documents().items():
+            title = self._document_title(path, body)
+            searchable = f"{path}\n{title}\n{body}".casefold()
+            matched = [term for term in terms if term in searchable]
+            if not matched:
+                continue
+            title_folded = title.casefold()
+            score = len(matched) * 10 + sum(term in title_folded for term in matched)
+            matches.append(
+                {
+                    "path": path,
+                    "title": title,
+                    "score": score,
+                    "matched_terms": matched,
+                    "matching_excerpt": self._matching_excerpt(body, matched, DOCUMENT_EXCERPT_CHARS),
+                }
+            )
+        matches.sort(key=lambda item: (-int(item["score"]), str(item["path"])))
+        page, pagination = self._page(matches, offset, page_size)
+        return {
+            "search_behavior": (
+                "Case-insensitive lexical search. A document may match any query term; documents matching more "
+                "terms rank first, with a small title-match boost."
+            ),
+            "hits": page,
+            "page": pagination,
+            "retrieve_full_with": "read_document(path)",
+        }
+
+    def read_document(self, path: str, offset: int = 0, max_chars: int = 20000) -> dict[str, object]:
+        documents = self._retrievable_documents()
+        try:
+            body = documents[path]
+        except KeyError as error:
+            raise McpDomainError(f"Unknown or unavailable board document: {path}") from error
+        if offset < 0:
+            raise McpDomainError("Document offset cannot be negative")
+        if not 1000 <= max_chars <= 50000:
+            raise McpDomainError("Document max_chars must be between 1000 and 50000")
+        content = body[offset : offset + max_chars]
+        next_offset = offset + len(content)
+        has_more = next_offset < len(body)
+        return {
+            "path": path,
+            "title": self._document_title(path, body),
+            "content": content,
+            "page": {
+                "offset": offset,
+                "returned_characters": len(content),
+                "total_characters": len(body),
+                "has_more": has_more,
+                "next_offset": next_offset if has_more else None,
+                "complete_document": offset == 0 and not has_more,
+            },
         }
 
     def search(
@@ -823,8 +913,7 @@ class ArchiveMcpState:
             "page": contribution_pagination,
             "retrieve_full_with": {
                 "contribution": (
-                    f"{self._read_tool_name('read_contribution', 'read_slowboard_contribution')}"
-                    "(contribution_id)"
+                    f"{self._read_tool_name('read_contribution', 'read_slowboard_contribution')}(contribution_id)"
                 ),
                 "thread": f"{self._read_tool_name('read_thread', 'read_slowboard_thread')}(thread_id)",
             },
