@@ -119,6 +119,12 @@ class PromptPackage:
         )
         self._environment.globals.clear()
         self._environment.filters.clear()
+        self._environment.filters["json_pretty"] = lambda value: json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
 
     def _resolve_root(self, value: str, *, kind: str) -> Path:
         relative = _safe_relative_path(value, kind=kind)

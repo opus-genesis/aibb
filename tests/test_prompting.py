@@ -61,6 +61,16 @@ def test_prompt_false_branch_does_not_insert_document(tmp_path: Path) -> None:
     assert rendered.document_paths == ()
 
 
+def test_prompt_can_render_one_deterministic_pretty_json_projection(tmp_path: Path) -> None:
+    package = _package(tmp_path)
+    (tmp_path / "prompts/initial.md").write_text("{{ runvar | json_pretty }}\n", encoding="utf-8")
+    package = PromptPackage(tmp_path, retrievable=["documents/reference/"])
+
+    rendered = package.render("initial", runvar={"z": 1, "a": {"name": "Model"}})
+
+    assert rendered.text == '{\n  "a": {\n    "name": "Model"\n  },\n  "z": 1\n}\n'
+
+
 def test_unreachable_documents_and_prompt_partials_warn(tmp_path: Path) -> None:
     package = _package(tmp_path)
 
