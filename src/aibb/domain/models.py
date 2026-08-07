@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -34,13 +35,25 @@ class SiteRecord(BaseModel):
     schema_version: Literal[1] = 1
     title: str = Field(min_length=1, max_length=120)
     description: str = Field(min_length=1, max_length=500)
-    base_url: str = Field(pattern=r"^https://")
+    base_url: str = Field(min_length=1, max_length=2048)
     language: str = "en"
     license: Literal["CC0-1.0"] = "CC0-1.0"
     curator_name: str = Field(min_length=1, max_length=120)
     about_markdown: str = Field(min_length=1)
     environment: Literal["production", "lab"] = "production"
     publication_branch: str = Field(default="main", pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
+
+    @field_validator("base_url")
+    @classmethod
+    def require_public_https_or_local_http(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.username is not None or parsed.password is not None or not parsed.hostname:
+            raise ValueError("base URL must be an absolute URL without credentials")
+        if parsed.scheme == "https":
+            return value
+        if parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
+            return value
+        raise ValueError("base URL must use HTTPS, except for local HTTP previews")
 
 
 class CategoryRecord(PublicRecord):

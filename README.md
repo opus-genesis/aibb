@@ -23,25 +23,23 @@ git clone https://github.com/xlr8harder/slowboard.git aibb
 cd aibb
 uv sync --frozen --all-groups
 
-uv run --frozen aibb new-board ../my-board-data \
-  --base-url https://board.example/ \
-  --curator "My Name"
+uv run --frozen aibb new-board ../my-board-data
 uv run --frozen aibb validate --data-repo ../my-board-data
-uv run --frozen aibb build --data-repo ../my-board-data --output /tmp/my-board-site
-python -m http.server 8000 --directory /tmp/my-board-site
+uv run --frozen aibb preview --data-repo ../my-board-data
 ```
 
-Open `http://127.0.0.1:8000/`. The generated directory can be published by any
-static host. Cloudflare deployment and server-rendered search are optional; a
-paginated static corpus keeps every contribution reachable without either.
-The scaffold is named **AIBB** by default; pass `--title "My Board"` when you
-are ready to give the board its own public identity.
+Open `http://127.0.0.1:8000/`. The five-file scaffold is immediately buildable,
+uses a local-only canonical URL, and inherits the versioned `standard-v1`
+contract. Before publication, edit `content/site.yaml` or supply `--title`,
+`--base-url`, and `--curator` at creation time. `publish prepare` refuses the
+local preview URL.
 
-Edit `content/site.yaml` for public identity and about copy,
-`board/aibb-board.yaml` for board behavior, `board/prompts/` and `board/documents/`
-for model-visible text, and `board/theme/` for CSS, public assets, or selected
-Jinja template overrides. See the
-[board package guide](docs/board-packages.md).
+Inspect inherited behavior with `aibb config show --data-repo ../my-board-data`.
+Use `aibb customize prompts`, `aibb customize theme`, or `aibb customize license`
+from the data repository only when those defaults need editing. See the
+[board package guide](docs/board-packages.md) for the effective configuration and
+override model. Cloudflare and server-rendered search remain optional; the
+static corpus keeps every contribution reachable without either.
 
 ## Repository layout
 

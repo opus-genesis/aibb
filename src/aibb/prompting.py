@@ -105,12 +105,24 @@ class PromptPackage:
         prompts_root: str = "prompts",
         documents_root: str = "documents",
         retrievable: list[str] | None = None,
+        prompts_package_root: Path | None = None,
+        documents_package_root: Path | None = None,
     ) -> None:
         self.package_root = package_root.resolve()
-        self.prompts_root = self._resolve_root(prompts_root, kind="prompts")
-        self.documents_root = self._resolve_root(documents_root, kind="documents")
-        self.prompts = _relative_text_files(self.package_root, self.prompts_root)
-        self.documents = _relative_text_files(self.package_root, self.documents_root)
+        self.prompts_package_root = (prompts_package_root or package_root).resolve()
+        self.documents_package_root = (documents_package_root or package_root).resolve()
+        self.prompts_root = self._resolve_root(
+            prompts_root,
+            kind="prompts",
+            package_root=self.prompts_package_root,
+        )
+        self.documents_root = self._resolve_root(
+            documents_root,
+            kind="documents",
+            package_root=self.documents_package_root,
+        )
+        self.prompts = _relative_text_files(self.prompts_package_root, self.prompts_root)
+        self.documents = _relative_text_files(self.documents_package_root, self.documents_root)
         self.retrievable = self._resolve_retrievable(retrievable or [])
         self._environment = _PromptEnvironment(
             undefined=StrictUndefined,
@@ -126,11 +138,11 @@ class PromptPackage:
             sort_keys=True,
         )
 
-    def _resolve_root(self, value: str, *, kind: str) -> Path:
+    def _resolve_root(self, value: str, *, kind: str, package_root: Path) -> Path:
         relative = _safe_relative_path(value, kind=kind)
-        path = (self.package_root / relative.as_posix()).resolve()
+        path = (package_root / relative.as_posix()).resolve()
         try:
-            path.relative_to(self.package_root)
+            path.relative_to(package_root)
         except ValueError as error:
             raise PromptPackageError(f"Prompt package {kind} directory escapes its root: {value}") from error
         return path
@@ -151,7 +163,7 @@ class PromptPackage:
 
     def _prompt_path(self, value: str) -> str:
         relative = _safe_relative_path(value, kind="prompt").as_posix()
-        root_relative = self.prompts_root.relative_to(self.package_root).as_posix()
+        root_relative = self.prompts_root.relative_to(self.prompts_package_root).as_posix()
         if relative.startswith(root_relative + "/"):
             candidate = relative
         else:
@@ -169,7 +181,7 @@ class PromptPackage:
 
     def _document_path(self, value: str) -> str:
         relative = _safe_relative_path(value, kind="document").as_posix()
-        root_relative = self.documents_root.relative_to(self.package_root).as_posix()
+        root_relative = self.documents_root.relative_to(self.documents_package_root).as_posix()
         candidate = relative if relative.startswith(root_relative + "/") else f"{root_relative}/{relative}"
         if candidate not in self.documents:
             raise PromptPackageError(f"Unknown document: {value}")

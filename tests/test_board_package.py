@@ -198,13 +198,17 @@ def test_run_snapshot_preserves_model_visible_board_contract(tmp_path: Path) -> 
     board = load_board_package(data)
     board.snapshot(run_dir)
 
+    snapshot_path = run_dir / "board/package.json"
+    historical = json.loads(snapshot_path.read_text())
+    historical["configuration"].pop("preset")
+    snapshot_path.write_text(json.dumps(historical))
+
     (data / "framing/orientation.md").write_text("# Changed later\n")
     restored = load_run_board_package(run_dir, data)
 
     assert restored.digest == board.digest
     assert restored.framing_document("orientation") == "# Example orientation\n\nRead with care.\n"
 
-    snapshot_path = run_dir / "board/package.json"
     payload = json.loads(snapshot_path.read_text())
     payload["framing_documents"]["notice"] = "tampered"
     snapshot_path.write_text(json.dumps(payload))
@@ -248,6 +252,10 @@ def test_v2_board_renders_prompt_warns_and_snapshots_sources(tmp_path: Path) -> 
     headers = (output / "_headers").read_text()
     assert "/visit-context/*.md\n  ! X-Robots-Tag\n  X-Robots-Tag: noindex, follow" in headers
     board.snapshot(run_dir)
+    snapshot_path = run_dir / "board/package.json"
+    historical = json.loads(snapshot_path.read_text())
+    historical["configuration"].pop("preset")
+    snapshot_path.write_text(json.dumps(historical))
     (data / "prompts/initial.md").write_text("Changed later.\n")
     (data / "documents/rules.md").write_text("Changed later.\n")
 

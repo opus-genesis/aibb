@@ -6,16 +6,21 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Annotated, Literal
 
 import typer
+import yaml
 from rich.console import Console
 
 from aibb import __version__
 from aibb.board import BoardPackage, load_board_package, load_run_board_package
 from aibb.config import load_archive_config, verify_archive_compatibility
 from aibb.curator import CuratorContributionError, create_curator_reply
+from aibb.customize import CustomizationComponent, materialize_board_customization
 from aibb.domain import load_archive
 from aibb.harness.amazon_bedrock import (
     BEDROCK_CONTEXT_WINDOW,
@@ -63,8 +68,12 @@ from aibb.starter import initialize_data_repo
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 publish_app = typer.Typer(no_args_is_help=True, help="Prepare, verify, and deploy a generated-site repository.")
 curator_app = typer.Typer(no_args_is_help=True, help="Create explicit human-curator candidates outside MCP.")
+config_app = typer.Typer(no_args_is_help=True, help="Inspect the board's expanded effective configuration.")
+customize_app = typer.Typer(no_args_is_help=True, help="Materialize inherited defaults for local editing.")
 app.add_typer(publish_app, name="publish")
 app.add_typer(curator_app, name="curator")
+app.add_typer(config_app, name="config")
+app.add_typer(customize_app, name="customize")
 
 
 @app.callback()
@@ -76,8 +85,106 @@ def _board_warnings(board: BoardPackage) -> list[dict[str, str]]:
     return [{"code": warning.code, "path": warning.path, "message": warning.message} for warning in board.warnings]
 
 
+def _site_warnings(base_url: str) -> list[dict[str, str]]:
+    if base_url.startswith("http://"):
+        return [
+            {
+                "code": "local-base-url",
+                "path": "content/site.yaml",
+                "message": (
+                    f"{base_url} is suitable for local preview only; configure a canonical HTTPS URL before "
+                    "publication."
+                ),
+            }
+        ]
+    return []
+
+
+def _customize(data_repo: Path, component: CustomizationComponent) -> None:
+    result = materialize_board_customization(data_repo, component)
+    typer.echo(
+        json.dumps(
+            {
+                "component": result.component,
+                "data_repo": str(data_repo),
+                "files": list(result.files),
+                "status": "materialized",
+            },
+            sort_keys=True,
+        )
+    )
+
+
 def _default_code_repo() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+@config_app.command("show")
+def show_board_config(
+    data_repo: Annotated[
+        Path,
+        typer.Option(
+            "--data-repo",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+            help="Path to the public board data repository.",
+        ),
+    ],
+    output_format: Annotated[
+        Literal["yaml", "json"],
+        typer.Option("--format", help="Machine-readable output format."),
+    ] = "yaml",
+) -> None:
+    """Show the complete inherited and overridden board contract."""
+
+    board = load_board_package(data_repo)
+    payload = {
+        "board_package_sha256": board.digest,
+        "component_sources": board.component_sources,
+        "effective": board.configuration.model_dump(mode="json", exclude_none=True),
+    }
+    if output_format == "json":
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        typer.echo(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).rstrip())
+
+
+@customize_app.command("prompts")
+def customize_prompts(
+    data_repo: Annotated[
+        Path,
+        typer.Option("--data-repo", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+) -> None:
+    """Materialize the standard prompts and their documents for editing."""
+
+    _customize(data_repo, "prompts")
+
+
+@customize_app.command("theme")
+def customize_theme(
+    data_repo: Annotated[
+        Path,
+        typer.Option("--data-repo", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+) -> None:
+    """Materialize the standard CSS, wordmark, and favicon for editing."""
+
+    _customize(data_repo, "theme")
+
+
+@customize_app.command("license")
+def customize_license(
+    data_repo: Annotated[
+        Path,
+        typer.Option("--data-repo", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+) -> None:
+    """Materialize the default publication license text for editing."""
+
+    _customize(data_repo, "license")
 
 
 def _resolve_image_policy(policy: Literal["auto", "enable", "disable"], image_input_supported: bool) -> bool:
@@ -636,6 +743,7 @@ def doctor(
     config = load_archive_config(data_repo)
     verify_archive_compatibility(config)
     board = load_board_package(data_repo, board_config)
+    corpus = load_archive(data_repo)
     typer.echo(
         json.dumps(
             {
@@ -646,7 +754,7 @@ def doctor(
                 "data_repo": str(data_repo),
                 "schema_version": config.schema_version,
                 "status": "compatible",
-                "warnings": _board_warnings(board),
+                "warnings": [*_board_warnings(board), *_site_warnings(corpus.site.base_url)],
             },
             sort_keys=True,
         )
@@ -686,7 +794,7 @@ def validate_archive(
                 "profiles": len(corpus.profiles),
                 "status": "valid",
                 "threads": len(corpus.threads),
-                "warnings": _board_warnings(board),
+                "warnings": [*_board_warnings(board), *_site_warnings(corpus.site.base_url)],
             },
             sort_keys=True,
         )
@@ -734,6 +842,54 @@ def build_archive(
     )
 
 
+@app.command("preview")
+def preview_archive(
+    data_repo: Annotated[
+        Path,
+        typer.Option(
+            "--data-repo",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+            help="Path to the public board data repository.",
+        ),
+    ] = Path("."),
+    host: Annotated[str, typer.Option("--host", help="Interface for the local review server.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", min=0, max=65535, help="Local review port.")] = 8000,
+) -> None:
+    """Validate, build, and serve a disposable local review site."""
+
+    corpus = load_archive(data_repo)
+    board = load_board_package(data_repo)
+    with tempfile.TemporaryDirectory(prefix="aibb-preview-") as temporary:
+        output = Path(temporary) / "site"
+        result = build_site(data_repo, output)
+        handler = partial(SimpleHTTPRequestHandler, directory=str(output))
+        server = ThreadingHTTPServer((host, port), handler)
+        actual_host, actual_port = server.server_address[:2]
+        display_host = "127.0.0.1" if actual_host in {"0.0.0.0", "::"} else actual_host
+        typer.echo(
+            json.dumps(
+                {
+                    "board_id": board.configuration.id,
+                    "canonical_url": corpus.site.base_url,
+                    "files": result.files,
+                    "status": "serving",
+                    "url": f"http://{display_host}:{actual_port}/",
+                    "warnings": [*_board_warnings(board), *_site_warnings(corpus.site.base_url)],
+                },
+                sort_keys=True,
+            )
+        )
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
+
+
 @app.command("init-data")
 def init_data(
     destination: Annotated[
@@ -771,12 +927,15 @@ def new_board(
     ],
     base_url: Annotated[
         str,
-        typer.Option("--base-url", help="Canonical HTTPS URL, including the eventual public domain."),
-    ],
+        typer.Option(
+            "--base-url",
+            help="Canonical URL; local HTTP is preview-only and publication requires HTTPS.",
+        ),
+    ] = "http://127.0.0.1:8000/",
     curator_name: Annotated[
         str,
         typer.Option("--curator", help="Public curator name used by the board."),
-    ],
+    ] = "Board curator",
     title: Annotated[
         str,
         typer.Option("--title", help="Public board and site title."),
@@ -803,7 +962,8 @@ def new_board(
                 "initial_revision": result.initial_revision,
                 "next": {
                     "build": f"aibb build --data-repo {result.destination} --output {result.destination}/dist",
-                    "configure": str(result.destination / "board/aibb-board.yaml"),
+                    "configure": str(result.destination / "content/site.yaml"),
+                    "preview": f"aibb preview --data-repo {result.destination}",
                 },
                 "status": "initialized",
             },

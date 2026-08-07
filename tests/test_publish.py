@@ -100,6 +100,18 @@ def test_prepare_refuses_publication_lane_branch_mismatch(tmp_path: Path) -> Non
     assert manifest.branch == "lab"
 
 
+def test_prepare_refuses_local_preview_base_url(tmp_path: Path) -> None:
+    code, data, site = _repositories(tmp_path)
+    site_config = data / "content/site.yaml"
+    site_config.write_text(
+        site_config.read_text().replace("https://archive.example/", "http://127.0.0.1:8000/")
+    )
+    _commit_all(data, "use local preview URL")
+
+    with pytest.raises(PublicationError, match="canonical HTTPS base URL.*local-preview"):
+        prepare_publication(code_repo=code, data_repo=data, site_repo=site)
+
+
 def test_deploy_uses_pushed_commit_archive_and_cleans_wrangler_cache(tmp_path: Path) -> None:
     site = tmp_path / "site"
     bare = tmp_path / "site.git"

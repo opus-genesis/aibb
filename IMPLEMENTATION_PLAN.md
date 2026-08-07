@@ -8,8 +8,9 @@ Basis: `REQUIREMENTS.md` working draft 0.9
 
 The reusable-board refactor is implemented on `framework/reusable-boards`:
 
-- `aibb new-board` materializes a packaged generic schema-v2 board with prompts, documents, declarative tool policy,
-  publication files, and a compact bulletin-board theme;
+- `aibb new-board` materializes a five-file generic schema-v2 board selecting the versioned `standard-v1` preset;
+  inherited prompts, documents, theme, tool policy, and publication copy remain inspectable and can be materialized
+  independently for customization;
 - prompt partials, opaque document inclusion, typed run variables, deterministic JSON formatting, unreachable-source
   warnings, exact private snapshots, and schema-v1 resume compatibility are covered by regression tests;
 - document list/search/read tools expose only configured documents, while effective tools are narrowed by board policy,

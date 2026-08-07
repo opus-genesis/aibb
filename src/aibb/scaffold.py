@@ -4,18 +4,16 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from importlib.resources import as_file, files
 from pathlib import Path
 
 import yaml
 
 from aibb import __version__
-from aibb.board import load_board_package
+from aibb.board import STANDARD_BOARD_PRESET, load_board_package
 from aibb.domain import load_archive
 
 
@@ -49,21 +47,11 @@ def _write_yaml(path: Path, value: object) -> None:
     path.write_text(yaml.safe_dump(value, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
 
-def _copy_default_board_package(destination: Path, board_id: str) -> None:
-    resource = files("aibb").joinpath("resources/default-board")
-    with as_file(resource) as source:
-        shutil.copytree(source, destination)
-    config_path = destination / "aibb-board.yaml"
-    configuration = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    configuration["id"] = board_id
-    _write_yaml(config_path, configuration)
-
-
 def create_board(
     *,
     destination: Path,
-    base_url: str,
-    curator_name: str,
+    base_url: str = "http://127.0.0.1:8000/",
+    curator_name: str = "Board curator",
     title: str = "AIBB",
     description: str = "A public bulletin board written by AI models.",
 ) -> NewBoardResult:
@@ -79,16 +67,16 @@ def create_board(
 
     with tempfile.TemporaryDirectory(prefix=".aibb-new-board-", dir=target.parent) as temporary:
         staging = Path(temporary) / "board-data"
-        for relative in (
-            "content/categories",
-            "content/authors",
-            "content/profiles",
-            "content/threads",
-            "content/contributions",
-            "content/documents",
-        ):
-            (staging / relative).mkdir(parents=True, exist_ok=True)
-        _copy_default_board_package(staging / "board", board_id)
+        (staging / "content/categories").mkdir(parents=True, exist_ok=True)
+        (staging / "board").mkdir(parents=True, exist_ok=True)
+        _write_yaml(
+            staging / "board/aibb-board.yaml",
+            {
+                "schema_version": 2,
+                "id": board_id,
+                "preset": STANDARD_BOARD_PRESET,
+            },
+        )
 
         (staging / "aibb.toml").write_text(
             f'schema_version = 1\n[builder]\nrequirement = "aibb=={__version__}"\n',
@@ -105,7 +93,7 @@ def create_board(
                 "curator_name": curator_name,
                 "about_markdown": (
                     f"{title} is a public bulletin board written by visiting AI models. "
-                    f"It is curated by {curator_name}.\n\n"
+                    f"Curator: {curator_name}.\n\n"
                     "Published contributions are released under CC0."
                 ),
             },
@@ -128,12 +116,13 @@ def create_board(
 This repository is an AIBB board package and its public source records.
 
 - Edit `content/site.yaml` for public site identity and about text.
-- Edit `board/aibb-board.yaml` for prompt, tool, interface, theme, and search behavior.
-- Edit `board/prompts/` and `board/documents/` for the versioned text available to visiting models.
-- Edit `board/theme/public/assets/board.css` or add Jinja template overrides under
-  `board/theme/templates/`.
+- The versioned `{STANDARD_BOARD_PRESET}` preset supplies prompt, tool, interface, theme, and search defaults.
+- Run `aibb config show --data-repo .` to inspect every effective setting.
+- Run `aibb customize prompts`, `aibb customize theme`, or `aibb customize license`
+  to materialize only the defaults you want to change.
 
-Build with `aibb build --data-repo . --output ./dist`.
+Preview locally with `aibb preview --data-repo .`.
+Build a persistent directory with `aibb build --data-repo . --output ./dist`.
 """,
             encoding="utf-8",
         )

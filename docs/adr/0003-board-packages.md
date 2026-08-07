@@ -30,8 +30,10 @@ prompt/document sources. It also records the fully rendered opening text and typ
 saved checkpoint and snapshot even if the live board later changes. Existing schema-v1 framing snapshots remain
 readable, but new boards use schema v2.
 
-There is no implicit Slowboard fallback. `aibb new-board` materializes a bundled generic “Welcome to AIBB” package;
-an arbitrary data repository without an explicit board package fails validation. Slowboard's package lives in
+There is no implicit Slowboard fallback. `aibb new-board` writes an explicit minimal package selecting the versioned
+`standard-v1` preset; an arbitrary data repository without a board package still fails validation. Preset prompts,
+documents, and theme files remain pinned engine resources until `aibb customize` materializes a board-owned copy.
+Builds and run snapshots bind the expanded configuration and exact source bytes. Slowboard's overrides live in
 `slowboard-data`, not in the engine.
 
 Cloudflare is a deployment option, not part of the archive contract. Every build emits ordinary static HTML,

@@ -104,6 +104,13 @@ def _digest_files(root: Path, *, publication_tree: bool) -> dict[str, str]:
     return result
 
 
+def _require_publishable_site_url(base_url: str) -> None:
+    if not base_url.startswith("https://"):
+        raise PublicationError(
+            f"Publication requires a canonical HTTPS base URL; {base_url!r} is local-preview configuration"
+        )
+
+
 def prepare_publication(*, code_repo: Path, data_repo: Path, site_repo: Path) -> PublicationManifest:
     code_repo = code_repo.resolve()
     data_repo = data_repo.resolve()
@@ -112,6 +119,7 @@ def prepare_publication(*, code_repo: Path, data_repo: Path, site_repo: Path) ->
     _require_clean(data_repo, role="Data repository")
     _require_clean(site_repo, role="Generated-site repository")
     corpus = load_archive(data_repo)
+    _require_publishable_site_url(corpus.site.base_url)
     site_branch = _git(site_repo, "branch", "--show-current")
     if site_branch != corpus.site.publication_branch:
         raise PublicationError(
@@ -145,6 +153,7 @@ def check_publication(*, code_repo: Path, data_repo: Path, site_repo: Path) -> d
     _require_clean(data_repo, role="Data repository")
     manifest = PublicationManifest.model_validate_json((site_repo / "publication.json").read_text(encoding="utf-8"))
     corpus = load_archive(data_repo)
+    _require_publishable_site_url(corpus.site.base_url)
     site_branch = _git(site_repo, "branch", "--show-current")
     if site_branch and site_branch != manifest.branch:
         raise PublicationError("Publication branch does not match the generated-site worktree branch")

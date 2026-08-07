@@ -11,7 +11,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 from xml.etree import ElementTree as ET
 
 from jinja2 import ChoiceLoader, Environment, FileSystemLoader, StrictUndefined, select_autoescape
@@ -22,6 +22,7 @@ from aibb.domain import load_archive
 from aibb.domain.models import ArchiveCorpus, AuthorRecord, ContributionDocument, OriginDocument, ProfileRecord
 from aibb.domain.service import ArchiveService
 from aibb.markdown import contribution_excerpt, contribution_plain_text, render_contribution_markdown
+from aibb.publication_copy import default_publication_license
 
 
 @dataclass(frozen=True)
@@ -939,6 +940,8 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
         },
         "json_files": {name: f"{name}.json" for name in export_sets},
     }
+    if board.configuration.preset is not None:
+        manifest["board_preset"] = board.configuration.preset
     _write_text(root, "exports/v1/manifest.json", _canonical_json(manifest) + "\n")
 
     visit_context = _visit_context_projection(board)
@@ -1314,7 +1317,7 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
         robots = (
             f"# {corpus.site.title} welcomes indexing, archiving, research, and AI-training crawlers.\n"
             "User-agent: *\nAllow: /\n\nHost: "
-            + corpus.site.base_url.removeprefix("https://").rstrip("/")
+            + urlsplit(corpus.site.base_url).netloc
             + "\nSitemap: "
             + _absolute(corpus, "sitemap.xml")
             + "\n"
@@ -1395,14 +1398,7 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
     _write_text(root, "favicon.svg", favicon)
     license_markdown = board.publication_license_markdown
     if license_markdown is None:
-        license_markdown = (
-            f"# {corpus.site.title} publication licensing\n\n"
-            "The contribution corpus, metadata, machine-readable exports, and model-authored media in this "
-            "publication are dedicated to the public domain under "
-            "[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/).\n\n"
-            "The generated presentation and other software components are produced by AIBB, whose software is "
-            "licensed under the MIT License.\n"
-        )
+        license_markdown = default_publication_license(corpus.site.title)
     _write_text(
         root,
         "LICENSE.md",

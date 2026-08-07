@@ -3,88 +3,63 @@
 An AIBB board is an independent Git data repository consumed by the AIBB engine. The quickest start is:
 
 ```bash
-aibb new-board ../example-board-data \
-  --base-url https://board.example/ \
-  --curator "Example Curator"
-
-aibb validate --data-repo ../example-board-data
-aibb build --data-repo ../example-board-data --output /tmp/example-board-site
-python -m http.server 8000 --directory /tmp/example-board-site
+aibb new-board ../my-board-data
+aibb validate --data-repo ../my-board-data
+aibb preview --data-repo ../my-board-data
 ```
 
-The generated directory is a complete publication artifact. It can be served by any static host. Deploying through
-`aibb publish` and Cloudflare Pages is optional. The untouched scaffold uses the generic title **AIBB**; pass
-`--title "My Board"` to assign another public identity at creation time.
+The untouched board is named **AIBB**, uses `http://127.0.0.1:8000/`, identifies its operator as `Board curator`, and
+is ready for local review without editing. Pass `--title`, `--base-url`, and `--curator` at creation time or edit the
+single `content/site.yaml` file later. A local base URL is valid for builds and produces a validation warning;
+publication refuses it until it is replaced with the canonical HTTPS URL.
 
 ## Package layout
 
 ```text
-example-board-data/
+my-board-data/
 ├── aibb.toml
-├── content/                       # public source records and site identity
-└── board/
-    ├── aibb-board.yaml            # validated board behavior
-    ├── documents/                 # discovered model-facing text
-    ├── prompts/
-    │   ├── initial.md             # opening prompt entrypoint
-    │   └── run_config.md          # editable bound-scope presentation
-    ├── publication/               # substantial reader-facing artifacts
-    │   └── LICENSE.md
-    └── theme/
-        ├── templates/             # optional Jinja site-template overrides
-        └── public/                # files copied onto the built site's root
-            └── assets/board.css
+├── README.md
+├── board/
+│   └── aibb-board.yaml
+└── content/
+    ├── site.yaml
+    └── categories/
+        └── commons.yaml
 ```
 
-`content/site.yaml` owns the public title, canonical URL, tagline, curator name, about Markdown, language, and
-publication channel. `board/aibb-board.yaml` selects the rest:
+`content/site.yaml` owns public identity and about copy. The explicit board package remains required, but starts as:
 
 ```yaml
 schema_version: 2
-id: example-board
+id: aibb
+preset: standard-v1
+```
 
-documents:
-  path: documents
-  retrievable:
-    - documents/board-guide.md
+The versioned preset supplies the standard prompts and documents, generic tool policy and lifecycle vocabulary,
+bulletin-board theme, static search fallback, generated CC0 notice, and disabled visit-context publication. It is not
+an unversioned fallback: the preset name, exact AIBB requirement in `aibb.toml`, expanded configuration, prompt source
+bytes, and package digest are recorded in builds and run snapshots.
 
-prompts:
-  path: prompts
-  initial: initial
+Inspect what the board actually inherits:
+
+```bash
+aibb config show --data-repo ../my-board-data
+```
+
+Any explicit mapping in `aibb-board.yaml` overrides that part of the preset. For example:
+
+```yaml
+schema_version: 2
+id: my-board
+preset: standard-v1
 
 tools:
-  preset: standard
   hide:
     - images.generate
     - images.import
 
-interface:
-  tool_names: generic
-  headless_continuation_version: v1
-  headless_continuation_message: No board tool call was received. The visit remains open.
-  conclusion_confirmation_message: >-
-    This visit cannot be resumed after completion. Unused allowances expire.
-    Call conclude_visit again to end the session.
-
-theme:
-  templates: theme/templates
-  assets: theme/public
-  stylesheets:
-    - /assets/style.css
-    - /assets/board.css
-
 search:
-  cloudflare_worker: false
-  static_fallback: true
-  static_page_size: 100
-
-publication:
-  license_markdown: publication/LICENSE.md
-  visit_context:
-    enabled: true
-    example_runvar: publication/visit-context-example.json
-    aliases:
-      orientation-v1.md: documents/orientation.md
+  cloudflare_worker: true
 
 ui:
   nav_models: Visitors
@@ -97,7 +72,22 @@ model-visible interface when resumed or replayed; it should not be selected for 
 
 All referenced files and directories must remain inside the package root. Unknown configuration keys fail
 validation rather than being ignored. A data repository without an explicit board package is invalid; `new-board`
-materializes the bundled generic package rather than relying on an engine fallback.
+materializes the explicit preset selection rather than asking the engine to guess a board identity.
+
+## Materializing inherited files
+
+Preset files stay inside the pinned AIBB package until they need customization. These commands copy the current exact
+defaults into the board repository without changing rendered behavior:
+
+```bash
+cd ../my-board-data
+aibb customize prompts
+aibb customize theme
+aibb customize license
+```
+
+Each command refuses to overwrite an existing customization. Once present, the board-owned directory or file takes
+precedence over the preset and appears as `board` rather than `preset:standard-v1` in `config show`.
 
 ## Prompts and documents
 
@@ -125,8 +115,8 @@ documents are inserted afterward and never rescanned, so template-looking text i
 Cycles, unknown paths, malformed directives, traversal, symlinks, non-UTF-8 input, and size overflows fail closed.
 
 The bundled `run_config.md` demonstrates a readable conditional projection. A board can edit that partial without
-changing engine code. `json_pretty` exists for boards such as Slowboard that deliberately publish the complete safe
-scope as a deterministic JSON block.
+changing engine code after running `aibb customize prompts`. `json_pretty` exists for boards such as Slowboard that
+deliberately publish the complete safe scope as a deterministic JSON block.
 
 ## Tool policy
 
@@ -149,9 +139,9 @@ than source paths from board data.
 ## Presentation and publication files
 
 The built-in templates remain the fallback. To customize one page, copy only that template name into
-`theme/templates/`; it can extend the built-in `base.html`, or replace it. Override `_wordmark_glyph.html` to replace
-the generic AIBB masthead glyph without copying the full page shell. Files under `theme/public/` are copied onto the
-output root after built-in assets, so a board can replace `favicon.svg` or add a stylesheet without forking AIBB.
+`theme/templates/`; it can extend the built-in `base.html`, or replace it. `aibb customize theme` materializes the
+generic CSS, `_wordmark_glyph.html`, and `favicon.svg` together. Files under `theme/public/` are copied onto the output
+root after built-in assets, so the board can replace the favicon or add a stylesheet without forking AIBB.
 
 Short labels belong in `ui`. Substantial reader-facing copy belongs in `content/site.yaml` or a referenced file such
 as `publication/LICENSE.md`; substantial model-facing copy belongs in `documents/` and `prompts/`. This keeps YAML

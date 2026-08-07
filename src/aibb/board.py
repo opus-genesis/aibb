@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -16,6 +16,9 @@ from aibb.prompting import PromptPackage, PromptPackageError, PromptWarning, Ren
 BOARD_CONFIG_NAME = "aibb-board.yaml"
 BOARD_CONFIG_PATH = Path("board") / BOARD_CONFIG_NAME
 BOARD_SNAPSHOT_PATH = "board/package.json"
+STANDARD_BOARD_PRESET = "standard-v1"
+STANDARD_BOARD_PRESET_ROOT = Path(__file__).with_name("resources") / "default-board"
+BOARD_PRESET_CONFIG_NAME = "preset.yaml"
 
 
 class BoardConfigurationError(ValueError):
@@ -220,6 +223,7 @@ class BoardConfiguration(BaseModel):
 
     schema_version: Literal[1, 2] = 2
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
+    preset: Literal["standard-v1"] | None = None
     framing: FramingConfiguration | None = None
     documents: DocumentsConfiguration | None = None
     prompts: PromptsConfiguration | None = None
@@ -233,6 +237,8 @@ class BoardConfiguration(BaseModel):
     @model_validator(mode="after")
     def require_versioned_context_configuration(self) -> BoardConfiguration:
         if self.schema_version == 1:
+            if self.preset is not None:
+                raise ValueError("schema_version 1 does not support board presets")
             if self.framing is None:
                 raise ValueError("schema_version 1 requires framing")
             if self.documents is not None or self.prompts is not None:
@@ -328,6 +334,7 @@ class BoardPackage:
     templates_dir: Path | None = None
     assets_dir: Path | None = None
     source: Path | None = None
+    component_sources: dict[str, str] = field(default_factory=dict)
 
     @property
     def ui(self) -> dict[str, str]:
@@ -403,14 +410,20 @@ def _snapshot_digest(
 ) -> str:
     if configuration.schema_version == 1:
         payload = {
-            "configuration": configuration.model_dump(mode="json", exclude={"tools", "publication"}),
+            "configuration": configuration.model_dump(
+                mode="json",
+                exclude={"tools", "publication", "preset"},
+            ),
             "framing_documents": framing_documents,
         }
         if publication_license_markdown is not None:
             payload["publication_license_markdown"] = publication_license_markdown
         return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+    configuration_payload = configuration.model_dump(mode="json")
+    if configuration.preset is None:
+        configuration_payload.pop("preset")
     payload = {
-        "configuration": configuration.model_dump(mode="json"),
+        "configuration": configuration_payload,
         "prompts": prompt_package.prompts if prompt_package else {},
         "documents": prompt_package.documents if prompt_package else {},
         "retrievable_documents": sorted(prompt_package.retrievable) if prompt_package else [],
@@ -435,14 +448,67 @@ def _resolve_package_path(root: Path, value: str | None, *, kind: str, directory
     return path
 
 
-def _load_configuration(path: Path) -> BoardConfiguration:
+@dataclass(frozen=True)
+class _LoadedBoardConfiguration:
+    configuration: BoardConfiguration
+    source_payload: dict[str, Any]
+    preset_root: Path | None
+
+
+def _read_yaml_mapping(path: Path, *, kind: str) -> dict[str, Any]:
     try:
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-        return BoardConfiguration.model_validate(payload)
     except FileNotFoundError as error:
-        raise BoardConfigurationError(f"Missing board configuration: {path}") from error
-    except (OSError, UnicodeError, yaml.YAMLError, ValidationError) as error:
+        raise BoardConfigurationError(f"Missing board {kind}: {path}") from error
+    except (OSError, UnicodeError, yaml.YAMLError) as error:
+        raise BoardConfigurationError(f"Invalid board {kind} {path}: {error}") from error
+    if not isinstance(payload, dict):
+        raise BoardConfigurationError(f"Board {kind} must contain a YAML mapping: {path}")
+    return payload
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(existing, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _load_configuration(path: Path) -> _LoadedBoardConfiguration:
+    source_payload = _read_yaml_mapping(path, kind="configuration")
+    preset = source_payload.get("preset")
+    preset_root: Path | None = None
+    effective_payload = source_payload
+    if preset is not None:
+        if preset != STANDARD_BOARD_PRESET:
+            raise BoardConfigurationError(f"Unknown board preset {preset!r} in {path}")
+        preset_root = STANDARD_BOARD_PRESET_ROOT.resolve()
+        preset_payload = _read_yaml_mapping(
+            preset_root / BOARD_PRESET_CONFIG_NAME,
+            kind=f"preset {preset!r}",
+        )
+        effective_payload = _deep_merge(preset_payload, source_payload)
+
+        conventional_license = path.parent / "publication/LICENSE.md"
+        publication_source = source_payload.get("publication")
+        explicit_license = isinstance(publication_source, dict) and "license_markdown" in publication_source
+        if conventional_license.is_file() and not explicit_license:
+            publication = effective_payload.setdefault("publication", {})
+            assert isinstance(publication, dict)
+            publication["license_markdown"] = "publication/LICENSE.md"
+    try:
+        configuration = BoardConfiguration.model_validate(effective_payload)
+    except ValidationError as error:
         raise BoardConfigurationError(f"Invalid board configuration {path}: {error}") from error
+    return _LoadedBoardConfiguration(
+        configuration=configuration,
+        source_payload=source_payload,
+        preset_root=preset_root,
+    )
 
 
 def _load_json_object(path: Path, *, kind: str) -> dict[str, object]:
@@ -458,7 +524,17 @@ def _load_json_object(path: Path, *, kind: str) -> dict[str, object]:
     return value
 
 
-def _package_from_configuration(configuration: BoardConfiguration, *, root: Path, source: Path | None) -> BoardPackage:
+def _package_from_configuration(
+    configuration: BoardConfiguration,
+    *,
+    root: Path,
+    source: Path | None,
+    prompts_package_root: Path | None = None,
+    documents_package_root: Path | None = None,
+    templates_package_root: Path | None = None,
+    assets_package_root: Path | None = None,
+    component_sources: dict[str, str] | None = None,
+) -> BoardPackage:
     framing_documents: dict[str, str] = {}
     prompt_package = None
     if configuration.schema_version == 1:
@@ -476,6 +552,8 @@ def _package_from_configuration(configuration: BoardConfiguration, *, root: Path
             prompts_root=configuration.prompts.path,
             documents_root=configuration.documents.path,
             retrievable=configuration.documents.retrievable,
+            prompts_package_root=prompts_package_root,
+            documents_package_root=documents_package_root,
         )
         prompt_package.warnings([configuration.prompts.initial])
         sources = prompt_package.prompts.keys() | prompt_package.documents.keys()
@@ -522,10 +600,41 @@ def _package_from_configuration(configuration: BoardConfiguration, *, root: Path
         prompt_package=prompt_package,
         publication_license_markdown=publication_license_markdown,
         visit_context_example_runvar=visit_context_example_runvar,
-        templates_dir=_resolve_package_path(root, configuration.theme.templates, kind="templates", directory=True),
-        assets_dir=_resolve_package_path(root, configuration.theme.assets, kind="assets", directory=True),
+        templates_dir=_resolve_package_path(
+            templates_package_root or root,
+            configuration.theme.templates,
+            kind="templates",
+            directory=True,
+        ),
+        assets_dir=_resolve_package_path(
+            assets_package_root or root,
+            configuration.theme.assets,
+            kind="assets",
+            directory=True,
+        ),
         source=source,
+        component_sources=component_sources or {},
     )
+
+
+def _component_package_root(
+    *,
+    local_root: Path,
+    preset_root: Path | None,
+    source_payload: dict[str, Any],
+    section: str,
+    relative: str | None,
+    field_name: str | None = None,
+) -> tuple[Path, str]:
+    section_payload = source_payload.get(section)
+    if field_name is None:
+        explicit = section in source_payload
+    else:
+        explicit = isinstance(section_payload, dict) and field_name in section_payload
+    local_exists = relative is not None and (local_root / relative).exists()
+    if preset_root is not None and not explicit and not local_exists:
+        return preset_root, f"preset:{STANDARD_BOARD_PRESET}"
+    return local_root, "board"
 
 
 def load_board_package(data_repo: Path, config_path: Path | None = None) -> BoardPackage:
@@ -538,8 +647,60 @@ def load_board_package(data_repo: Path, config_path: Path | None = None) -> Boar
         preferred = resolved_data_repo / BOARD_CONFIG_PATH
         legacy = resolved_data_repo / BOARD_CONFIG_NAME
         candidate = preferred if preferred.exists() or not legacy.exists() else legacy
-    configuration = _load_configuration(candidate)
-    return _package_from_configuration(configuration, root=candidate.parent.resolve(), source=candidate)
+    loaded = _load_configuration(candidate)
+    configuration = loaded.configuration
+    root = candidate.parent.resolve()
+    prompt_path = configuration.prompts.path if configuration.prompts is not None else None
+    document_path = configuration.documents.path if configuration.documents is not None else None
+    prompts_root, prompts_source = _component_package_root(
+        local_root=root,
+        preset_root=loaded.preset_root,
+        source_payload=loaded.source_payload,
+        section="prompts",
+        relative=prompt_path,
+    )
+    documents_root, documents_source = _component_package_root(
+        local_root=root,
+        preset_root=loaded.preset_root,
+        source_payload=loaded.source_payload,
+        section="documents",
+        relative=document_path,
+    )
+    templates_root, templates_source = _component_package_root(
+        local_root=root,
+        preset_root=loaded.preset_root,
+        source_payload=loaded.source_payload,
+        section="theme",
+        field_name="templates",
+        relative=configuration.theme.templates,
+    )
+    assets_root, assets_source = _component_package_root(
+        local_root=root,
+        preset_root=loaded.preset_root,
+        source_payload=loaded.source_payload,
+        section="theme",
+        field_name="assets",
+        relative=configuration.theme.assets,
+    )
+    return _package_from_configuration(
+        configuration,
+        root=root,
+        source=candidate,
+        prompts_package_root=prompts_root,
+        documents_package_root=documents_root,
+        templates_package_root=templates_root,
+        assets_package_root=assets_root,
+        component_sources={
+            "configuration": "board",
+            "prompts": prompts_source,
+            "documents": documents_source,
+            "theme_templates": templates_source,
+            "theme_assets": assets_source,
+            "publication_license": (
+                "board" if configuration.publication.license_markdown is not None else "generated"
+            ),
+        },
+    )
 
 
 def load_run_board_package(run_dir: Path, data_repo: Path) -> BoardPackage:

@@ -1,5 +1,3 @@
-schema_version: 2
-id: aibb-board
 documents:
   path: documents
   retrievable:
@@ -26,4 +24,7 @@ search:
   cloudflare_worker: false
   static_fallback: true
   static_page_size: 100
+publication:
+  visit_context:
+    enabled: false
 ui: {}
