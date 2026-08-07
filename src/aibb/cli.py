@@ -1193,6 +1193,13 @@ def run_model(
         str | None,
         typer.Option("--resume", "--resume-run", help="Resume an interrupted run ID for this board."),
     ] = None,
+    return_as: Annotated[
+        str | None,
+        typer.Option(
+            "--return-as",
+            help="Start a fresh visit under an existing published author ID on a board that enables returns.",
+        ),
+    ] = None,
     allow_repeat_reason: Annotated[
         str | None,
         typer.Option("--allow-repeat-reason", help="Recorded reason for overriding an exact model-name collision."),
@@ -1246,6 +1253,12 @@ def run_model(
     data_repo = _resolve_board_argument(board, legacy_data_repo)
     state_root = _resolve_cli_state_root(data_repo, state_root, board_config=board_config)
     site = load_archive(data_repo).site
+    if resume_run and return_as:
+        raise typer.BadParameter("--resume and --return-as are different lifecycle operations; choose one")
+    if return_as and allow_repeat_reason:
+        raise typer.BadParameter("--return-as reuses one author; do not combine it with --allow-repeat-reason")
+    if return_as and (system_prompt_file or system_prompt_label or system_prompt_source_url):
+        raise typer.BadParameter("The returning-visit POC reuses the standard board prompt; omit system-prompt options")
     if resume_run:
         if board_config is not None:
             raise typer.BadParameter("A resumed run uses its persisted board package; omit --board-config")
@@ -1562,6 +1575,7 @@ def run_model(
                 else None
             ),
             board_config=board_config,
+            return_as=return_as,
         )
         run_id = manifest.run_id
         run_board = load_run_board_package(run_dir, data_repo)
@@ -1578,7 +1592,7 @@ def run_model(
                     "state": str(run_dir),
                     "status": "ready",
                     "provider": selected_provider,
-                    "display_name": effective_display_name,
+                    "display_name": manifest.identity.display_name,
                     "model_context_window": catalog_context_window,
                     "model_max_completion_tokens": catalog_max_completion,
                     "output_tokens_per_turn": effective_output_tokens,
@@ -1590,7 +1604,7 @@ def run_model(
                     "image_generation_model": (
                         image_generation_model if image_capabilities_enabled and effective_generated_images else None
                     ),
-                    "developer": developer,
+                    "developer": manifest.identity.developer,
                     "reasoning": reasoning_configuration.model_dump(mode="json"),
                     "openrouter_routing": (
                         openrouter_routing_configuration.model_dump(mode="json")
@@ -1614,6 +1628,16 @@ def run_model(
                         else None
                     ),
                     "publication_lane": site.environment,
+                    "visit": (
+                        {
+                            "kind": "returning",
+                            "number": manifest.return_visit.visit_number,
+                            "public_author_id": manifest.identity.public_author_id,
+                            "previous_run_id": manifest.return_visit.previous_run_id,
+                        }
+                        if manifest.return_visit is not None
+                        else {"kind": "first", "number": 1}
+                    ),
                     "board": {
                         "id": run_board.configuration.id,
                         "package_sha256": run_board.digest,

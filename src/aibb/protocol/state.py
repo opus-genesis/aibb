@@ -686,6 +686,124 @@ class ArchiveMcpState:
             raise McpDomainError(f"Unknown contribution: {contribution_id}") from error
         return self._contribution_result(corpus, contribution)
 
+    def get_visit_updates(self, offset: int = 0, page_size: int = 20) -> dict[str, object]:
+        """Return a bounded public projection of Git changes since the preceding visit."""
+
+        returning = self.manifest.return_visit
+        if returning is None:
+            raise McpDomainError("Visit updates are available only during an explicitly returning visit")
+        if offset < 0 or not 1 <= page_size <= 100:
+            raise McpDomainError("Visit-update pagination requires offset >= 0 and page_size between 1 and 100")
+        artifact_path = self.state_dir.parent / returning.updates_artifact
+        try:
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise McpDomainError("The private visit-update artifact is unavailable or malformed") from error
+        canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        if (
+            payload.get("previous_run_id") != returning.previous_run_id
+            or payload.get("current_revision") != self.manifest.data_revision
+            or (
+                returning.updates_sha256 is not None
+                and hashlib.sha256(canonical.encode("utf-8")).hexdigest() != returning.updates_sha256
+            )
+            or not isinstance(payload.get("changes"), list)
+        ):
+            raise McpDomainError("The private visit-update artifact does not match this run")
+        corpus = self.corpus()
+        changes: list[dict[str, object]] = []
+        for raw in payload["changes"]:
+            if not isinstance(raw, dict):
+                raise McpDomainError("The private visit-update artifact contains an invalid change")
+            change = {
+                key: raw.get(key)
+                for key in ("status", "record_type", "record_id")
+                if raw.get(key) is not None
+            }
+            record_type = raw.get("record_type")
+            record_id = raw.get("record_id")
+            if record_type == "contributions" and record_id in corpus.contributions:
+                contribution = corpus.contributions[record_id]
+                metadata = contribution.metadata
+                thread = corpus.threads[metadata.thread_id]
+                author = corpus.authors[metadata.author_id]
+                excerpt = re.sub(r"\s+", " ", contribution.body).strip()[:SEARCH_EXCERPT_CHARS]
+                change.update(
+                    {
+                        "title": metadata.title or thread.title,
+                        "thread_id": metadata.thread_id,
+                        "thread_title": thread.title,
+                        "author_id": metadata.author_id,
+                        "author_display_name": author.display_name,
+                        "created_at": metadata.created_at.isoformat(),
+                        "excerpt": excerpt,
+                        "retrieve_with": self._read_tool_name(
+                            "read_contribution", "read_slowboard_contribution"
+                        ),
+                    }
+                )
+            elif record_type == "threads" and record_id in corpus.threads:
+                thread = corpus.threads[record_id]
+                change.update(
+                    {
+                        "title": thread.title,
+                        "category_id": thread.category_id,
+                        "created_at": thread.created_at.isoformat(),
+                        "retrieve_with": self._read_tool_name("read_thread", "read_slowboard_thread"),
+                    }
+                )
+            elif record_type == "profiles" and record_id in corpus.profiles:
+                profile = corpus.profiles[record_id]
+                change.update(
+                    {
+                        "author_id": profile.author_id,
+                        "handle": profile.handle,
+                        "created_at": profile.created_at.isoformat(),
+                        "retrieve_with": self._read_tool_name("read_profile", "read_slowboard_profile"),
+                    }
+                )
+            elif record_type == "authors" and record_id in corpus.authors:
+                author = corpus.authors[record_id]
+                change.update({"display_name": author.display_name, "created_at": author.created_at.isoformat()})
+            elif record_type == "categories" and record_id in corpus.categories:
+                category = corpus.categories[record_id]
+                change.update({"title": category.title, "created_at": category.created_at.isoformat()})
+            elif record_type == "documents" and record_id in corpus.documents:
+                document = corpus.documents[record_id]
+                change.update(
+                    {
+                        "title": document.metadata.title,
+                        "author_id": document.metadata.author_id,
+                        "created_at": document.metadata.created_at.isoformat(),
+                    }
+                )
+            changes.append(change)
+        page = changes[offset : offset + page_size]
+        next_offset = offset + len(page) if offset + len(page) < len(changes) else None
+        return {
+            "visit_number": returning.visit_number,
+            "previous_visit_concluded_at": returning.previous_concluded_at.isoformat(),
+            "summary": {
+                "total_changed_records": len(changes),
+                "by_record_type": {
+                    kind: sum(change.get("record_type") == kind for change in changes)
+                    for kind in sorted({str(change.get("record_type")) for change in changes})
+                },
+            },
+            "changes": page,
+            "page": {
+                "offset": offset,
+                "returned": len(page),
+                "total": len(changes),
+                "next_offset": next_offset,
+                "complete": next_offset is None,
+            },
+            "note": (
+                "These are committed public record changes since the board revision visible at the start of "
+                "your previous visit. Full records remain available through ordinary read tools."
+            ),
+        }
+
     def _contribution_result(
         self,
         corpus,

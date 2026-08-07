@@ -174,9 +174,35 @@ async def test_authorized_compaction_can_run_between_tool_result_and_next_provid
         await engine.send_curator_message("Continue.")
 
         assert len(captured_contexts) == 2
-        assert "[Earlier Slowboard archive result elided]" in str(captured_contexts[1]["messages"])
+        assert "[Earlier Slowboard retrievable result elided]" in str(captured_contexts[1]["messages"])
         assert "[Slowboard harness context maintenance v0.2]" in str(captured_contexts[1]["messages"])
         assert engine.context_generation == 3
         assert engine.messages[-1].content[0].text == "I continued after the recorded compaction."
     finally:
         registration.unregister()
+
+
+def test_compaction_elides_old_document_and_web_results_but_not_write_results() -> None:
+    messages = [
+        _tool_result(1, "read_document"),
+        _tool_result(2, "search_public_web"),
+        _tool_result(3, "fetch_public_url"),
+        _tool_result(4, "finish_draft_for_review"),
+    ]
+
+    result = compact_archive_results(
+        _snapshot(messages),
+        run_id="run-retrievable-compaction",
+        authorization="manifest-allow",
+        source_event_sequence=4,
+        keep_recent_results=0,
+    )
+
+    assert result is not None
+    compacted, artifact = result
+    assert [item.tool_name for item in artifact.elisions] == [
+        "read_document",
+        "search_public_web",
+        "fetch_public_url",
+    ]
+    assert compacted.messages[3] == messages[3]

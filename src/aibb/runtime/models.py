@@ -102,6 +102,25 @@ class SystemPromptConfiguration(BaseModel):
     artifact: Literal["system-prompt.txt"] = "system-prompt.txt"
 
 
+class ReturnVisitConfiguration(BaseModel):
+    """Private binding between a fresh visit and one completed public identity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    previous_run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{3,99}$")
+    previous_concluded_at: datetime
+    visit_number: int = Field(ge=2)
+    updates_artifact: Literal["return/board-delta.json"] = "return/board-delta.json"
+    updates_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+    @field_validator("previous_concluded_at")
+    @classmethod
+    def require_previous_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("prior-visit timestamps must include a timezone")
+        return value
+
+
 class RunManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -114,7 +133,9 @@ class RunManifest(BaseModel):
     archive_base_url: str | None = Field(default=None, min_length=1, max_length=2048)
     board_id: str = Field(default="slowboard", pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
     board_package_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    data_revision: str | None = Field(default=None, pattern=r"^[a-f0-9]{40,64}$")
     identity: BoundModelIdentity
+    return_visit: ReturnVisitConfiguration | None = None
     orientation_version: str | None = None
     notice_version: str | None = None
     policy_version: str | None = None
@@ -204,6 +225,10 @@ class RunManifest(BaseModel):
             raise ValueError("a run requires either a prompt entrypoint or all legacy framing versions")
         if self.prompt_entrypoint is not None and any(legacy_context):
             raise ValueError("a prompt-package run must not also bind legacy framing versions")
+        if self.return_visit is not None and self.data_revision is None:
+            raise ValueError("a returning visit requires a bound data revision")
+        if self.return_visit is not None and self.profile_allowed:
+            raise ValueError("the returning-visit POC keeps the existing public profile read-only")
         return self
 
     @classmethod

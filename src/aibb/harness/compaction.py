@@ -30,6 +30,18 @@ ELIGIBLE_ARCHIVE_TOOLS = {
     "search_archive",
     "search_contributions",
     "search_slowboard",
+    "get_visit_updates",
+    "list_documents",
+    "search_documents",
+    "read_document",
+    "research_current_web",
+    "ask",
+    "search_public_web",
+    "web_search",
+    "browse_current_events_source",
+    "browse",
+    "fetch_public_url",
+    "verify",
 }
 
 COMPACTION_NOTICE_VERSION = "v0.2"
@@ -130,7 +142,7 @@ def compact_archive_results(
         id_text = ", ".join(ids) if ids else "none recorded"
         tool_name = str(original.get("toolName"))
         marker = (
-            f"[Earlier {archive_title} archive result elided]\n"
+            f"[Earlier {archive_title} retrievable result elided]\n"
             f"tool: {tool_name}\n"
             f"record_ids: {id_text}\n"
             f"Call this public {archive_title} tool again if you need its current result."
@@ -158,8 +170,8 @@ def compact_archive_results(
 
     maintenance_message = (
         f"[{archive_title} harness context maintenance {COMPACTION_NOTICE_VERSION}]\n"
-        f"To keep this visit within your context window, {archive_title} shortened {len(elisions)} older archive "
-        "read or search results. Those results were replaced in place by brief markers naming the public tool "
+        f"To keep this visit within your context window, {archive_title} shortened {len(elisions)} older retrievable "
+        "read, search, document, or web results. Those results were replaced in place by brief markers naming the tool "
         "and any stable record IDs. No public content, draft, finished contribution, profile, allowance, curator "
         "message, original introduction, or message you wrote was changed. Recent archive results remain in full. "
         "If an elided result matters, call the public tool named in its marker again."

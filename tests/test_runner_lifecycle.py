@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from rich.console import Console
 from test_archive_build import _write_archive
 from test_budget import make_manifest
+from typer.main import get_command
 from typer.testing import CliRunner
 
 from aibb.cli import app
@@ -196,11 +197,14 @@ def test_current_orientation_distinguishes_bootstrap_from_ordinary_operation() -
 
 def test_run_cli_exposes_public_developer_override() -> None:
     result = CliRunner().invoke(app, ["run", "--help"])
+    run_command = get_command(app).commands["run"]
+    option_names = {name for parameter in run_command.params for name in getattr(parameter, "opts", [])}
 
     assert result.exit_code == 0
     assert "[BOARD]" in result.output
-    assert "--production" not in result.output
-    assert "--developer" in result.output
+    assert "--production" not in option_names
+    assert "--developer" in option_names
+    assert "--return-as" in option_names
     assert "presentation-poor" in result.output
     assert "inferred from provider" in result.output
 

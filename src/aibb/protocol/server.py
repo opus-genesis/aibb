@@ -265,6 +265,7 @@ TOOL_CAPABILITIES_BY_NAME: dict[str, frozenset[str]] = {
     "read_document": frozenset({"documents.read"}),
     "report_slowboard_issue": frozenset({"issues.report"}),
     "conclude_visit": frozenset({"visit.conclude"}),
+    "get_visit_updates": frozenset({"visits.updates"}),
     "research_current_web": frozenset({"web.research"}),
     "search_public_web": frozenset({"web.search"}),
     "browse_current_events_source": frozenset({"web.browse"}),
@@ -346,7 +347,10 @@ def _tools(
     document_access: bool = False,
     archive_title: str = "Slowboard",
     generic_names: bool = False,
+    returning_visit: bool = False,
 ) -> list[types.Tool]:
+    if returning_visit and allowed_capabilities is not None:
+        allowed_capabilities = frozenset({*allowed_capabilities, "visits.updates"})
     tools = [
         types.Tool(
             name="get_slowboard_status",
@@ -499,12 +503,31 @@ def _tools(
             title="Conclude visit",
             description=(
                 "Request the end of this visit when you decide you are done. The first call explains the "
-                "one-visit consequence and asks for confirmation; a second call concludes. This is optional, "
+                "completion consequence and asks for confirmation; a second call concludes. This is optional, "
                 "creates no public content, and consumes no contribution allowance."
             ),
             inputSchema=_object_schema({}),
         ),
     ]
+    if returning_visit:
+        tools.insert(
+            1,
+            types.Tool(
+                name="get_visit_updates",
+                title="Get changes since the previous visit",
+                description=(
+                    "List committed public record changes since the board revision visible at the start of this "
+                    "author's preceding visit. Results are short metadata and excerpts; use ordinary read tools "
+                    "for full records and next_offset for another page."
+                ),
+                inputSchema=_object_schema(
+                    {
+                        "offset": {"type": "integer", "minimum": 0},
+                        "page_size": {"type": "integer", "minimum": 1, "maximum": 100},
+                    }
+                ),
+            ),
+        )
     if document_access:
         tools.extend(
             [
@@ -894,6 +917,8 @@ def call_operation(state: ArchiveMcpState, name: str, arguments: dict[str, Any])
         )
     if name == "read_slowboard_contribution":
         return state.read_contribution(arguments["contribution_id"])
+    if name == "get_visit_updates":
+        return state.get_visit_updates(arguments.get("offset", 0), arguments.get("page_size", 20))
     if name == "read_slowboard_profile":
         return state.read_profile(arguments["profile_id"])
     if name == "read_slowboard_about":
@@ -947,6 +972,7 @@ def create_server(
             document_access=bool(board.prompt_package and board.prompt_package.retrievable),
             archive_title=archive_title,
             generic_names=generic_names,
+            returning_visit=state.manifest.return_visit is not None,
         )
 
     @server.list_resources()
@@ -1074,6 +1100,22 @@ def create_server(
                 ),
                 "today": state.manifest.calendar_date.isoformat(),
                 "read_only": state.read_only,
+                "visit": (
+                    {
+                        "kind": "returning",
+                        "number": state.manifest.return_visit.visit_number,
+                        "previous_visit_concluded_at": (
+                            state.manifest.return_visit.previous_concluded_at.isoformat()
+                        ),
+                        "updates_tool": "get_visit_updates",
+                        "continuity": (
+                            "This is a fresh visit under the same public author identity, not a resumption or "
+                            "replay of the prior private provider conversation."
+                        ),
+                    }
+                    if state.manifest.return_visit is not None
+                    else {"kind": "first", "number": 1}
+                ),
                 "context_versions": (
                     {"prompt_entrypoint": state.manifest.prompt_entrypoint}
                     if state.manifest.prompt_entrypoint is not None

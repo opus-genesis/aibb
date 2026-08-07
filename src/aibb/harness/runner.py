@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -39,6 +40,7 @@ from aibb.runtime.models import (
     BoundModelIdentity,
     BudgetLimits,
     OpenRouterRoutingConfiguration,
+    ReturnVisitConfiguration,
     SystemPromptConfiguration,
 )
 from aibb.sessions import SessionStore
@@ -132,6 +134,142 @@ def _require_clean_data_repo(data_repo: Path) -> None:
         raise ValueError("A new run requires a clean data-repository worktree")
 
 
+def _git_revision(data_repo: Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(data_repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _completed_at(run_dir: Path) -> datetime | None:
+    conclusion = run_dir / "mcp/visit-conclusion.json"
+    if conclusion.is_file():
+        value = json.loads(conclusion.read_text(encoding="utf-8")).get("concluded_at")
+        return datetime.fromisoformat(value) if isinstance(value, str) else None
+    events = run_dir / "session/events.jsonl"
+    if not events.is_file():
+        return None
+    completed: datetime | None = None
+    for line in events.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if event.get("type") == "run_completed" and isinstance(event.get("timestamp"), str):
+            completed = datetime.fromisoformat(event["timestamp"])
+    return completed
+
+
+def _previous_completed_visits(state_root: Path, author_id: str) -> list[tuple[RunManifest, Path, datetime]]:
+    visits: list[tuple[RunManifest, Path, datetime]] = []
+    if not state_root.exists():
+        return visits
+    for path in sorted(state_root.glob("*/manifest.json")):
+        try:
+            manifest = RunManifest.load(path)
+            completed_at = _completed_at(path.parent)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError(f"Cannot inspect private run state at {path.parent}: {error}") from error
+        if manifest.identity.public_author_id == author_id and completed_at is not None:
+            visits.append((manifest, path.parent, completed_at))
+    visits.sort(key=lambda item: (item[0].created_at, item[0].run_id))
+    return visits
+
+
+def _unfinished_author_runs(state_root: Path, author_id: str) -> list[str]:
+    unfinished: list[str] = []
+    if not state_root.exists():
+        return unfinished
+    for path in sorted(state_root.glob("*/manifest.json")):
+        try:
+            manifest = RunManifest.load(path)
+            completed_at = _completed_at(path.parent)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError(f"Cannot inspect private run state at {path.parent}: {error}") from error
+        if manifest.identity.public_author_id == author_id and completed_at is None:
+            unfinished.append(manifest.run_id)
+    return unfinished
+
+
+def _git_is_ancestor(data_repo: Path, older: str, newer: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(data_repo), "merge-base", "--is-ancestor", older, newer],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode not in {0, 1}:
+        raise ValueError("Could not verify the prior visit's inherited Git revision")
+    return result.returncode == 0
+
+
+def _return_delta_payload(
+    data_repo: Path,
+    *,
+    previous_revision: str,
+    current_revision: str,
+    previous_run_id: str,
+) -> dict[str, object]:
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(data_repo),
+            "diff",
+            "--name-status",
+            "--find-renames",
+            previous_revision,
+            current_revision,
+            "--",
+            "content",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    changes: list[dict[str, object]] = []
+    for line in result.stdout.splitlines():
+        fields = line.split("\t")
+        if len(fields) < 2:
+            continue
+        status = fields[0]
+        path = fields[-1]
+        source_path = fields[1] if status.startswith(("R", "C")) and len(fields) == 3 else None
+        parts = Path(path).parts
+        record_type = parts[1] if len(parts) >= 3 and parts[0] == "content" else "other"
+        record_id = Path(parts[-1]).stem if len(parts) >= 3 else None
+        changes.append(
+            {
+                "status": status,
+                "path": path,
+                "source_path": source_path,
+                "record_type": record_type,
+                "record_id": record_id,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "previous_run_id": previous_run_id,
+        "previous_revision": previous_revision,
+        "current_revision": current_revision,
+        "changes": changes,
+    }
+
+
+def _return_delta_sha256(payload: dict[str, object]) -> str:
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _write_return_delta(run_dir: Path, payload: dict[str, object]) -> None:
+    destination = run_dir / "return/board-delta.json"
+    destination.parent.mkdir(parents=True, exist_ok=False)
+    with destination.open("x", encoding="utf-8") as stream:
+        json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
+        stream.write("\n")
+
+
 def _check_collision(data_repo: Path, state_root: Path, normalized_name: str) -> list[str]:
     def canonical(value: str) -> str:
         return value.removeprefix("openrouter/")
@@ -198,10 +336,58 @@ def create_run_manifest(
     system_prompt_source_url: str | None = None,
     normalized_model_id: str | None = None,
     board_config: Path | None = None,
+    return_as: str | None = None,
 ) -> tuple[RunManifest, Path]:
     _require_clean_data_repo(data_repo)
     normalized_name = normalized_model_id or model_id
-    collisions = _check_collision(data_repo, state_root, normalized_name)
+    archive = load_archive(data_repo)
+    board = load_board_package(data_repo, board_config)
+    current_revision = _git_revision(data_repo)
+    returning_author = None
+    return_configuration: ReturnVisitConfiguration | None = None
+    return_delta: dict[str, object] | None = None
+    if return_as is not None:
+        if board.configuration.visits.returning != "explicit":
+            raise ValueError("This board does not enable explicit returning visits")
+        returning_author = archive.authors.get(return_as)
+        if returning_author is None or returning_author.record_status is not None:
+            raise ValueError(f"Returning author is not a published author: {return_as}")
+        if returning_author.kind != "model":
+            raise ValueError("Only a published model author may be selected for a returning model visit")
+        if returning_author.provider != provider or returning_author.normalized_model_name != normalized_name:
+            raise ValueError(
+                "Returning visits require the same provider and normalized model identity as the published author"
+            )
+        unfinished = _unfinished_author_runs(state_root, return_as)
+        if unfinished:
+            raise ValueError(
+                "Returning author has an unfinished private run that must be resumed or resolved first: "
+                + ", ".join(unfinished)
+            )
+        previous_visits = _previous_completed_visits(state_root, return_as)
+        if not previous_visits:
+            raise ValueError(f"No completed private visit exists for returning author {return_as}")
+        previous_manifest, _previous_dir, previous_concluded_at = previous_visits[-1]
+        if previous_manifest.data_revision is None:
+            raise ValueError("The previous visit predates revision tracking and cannot be returned from safely")
+        if previous_manifest.board_id != board.configuration.id:
+            raise ValueError("The previous visit belongs to a different board")
+        previous_revision = previous_manifest.data_revision
+        if not _git_is_ancestor(data_repo, previous_revision, current_revision):
+            raise ValueError("The current board history does not descend from the preceding visit's data revision")
+        return_delta = _return_delta_payload(
+            data_repo,
+            previous_revision=previous_revision,
+            current_revision=current_revision,
+            previous_run_id=previous_manifest.run_id,
+        )
+        return_configuration = ReturnVisitConfiguration(
+            previous_run_id=previous_manifest.run_id,
+            previous_concluded_at=previous_concluded_at,
+            visit_number=len(previous_visits) + 1,
+            updates_sha256=_return_delta_sha256(return_delta),
+        )
+    collisions = [] if return_as is not None else _check_collision(data_repo, state_root, normalized_name)
     if collisions and not allow_repeat_reason:
         raise ValueError(
             "Exact provider/model identity already exists: "
@@ -214,9 +400,8 @@ def create_run_manifest(
     calendar_utc_offset = f"{raw_offset[:3]}:{raw_offset[3:]}"
     run_id = f"run-{now.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     public_identity_name = display_name if system_prompt_label is not None else normalized_name
-    author_id = _slug(f"{public_identity_name}-{run_id[-8:]}", 79)
-    site = load_archive(data_repo).site
-    board = load_board_package(data_repo, board_config)
+    author_id = return_as or _slug(f"{public_identity_name}-{run_id[-8:]}", 79)
+    site = archive.site
     if (system_prompt_text is None) != (system_prompt_label is None):
         raise ValueError("A custom system prompt requires both text and a label")
     if system_prompt_text is None and system_prompt_source_url is not None:
@@ -246,17 +431,19 @@ def create_run_manifest(
         archive_base_url=site.base_url,
         board_id=board.configuration.id,
         board_package_sha256=board.digest,
+        data_revision=current_revision,
         identity=BoundModelIdentity(
             provider=provider,
             endpoint=resolved_endpoint,
-            developer=developer,
+            developer=returning_author.developer if returning_author is not None else developer,
             model_name=model_id,
             normalized_model_name=normalized_name,
-            generation=generation,
-            lineage=lineage,
+            generation=returning_author.generation if returning_author is not None else generation,
+            lineage=returning_author.lineage if returning_author is not None else lineage,
             public_author_id=author_id,
-            display_name=display_name,
+            display_name=returning_author.display_name if returning_author is not None else display_name,
         ),
+        return_visit=return_configuration,
         orientation_version=(
             board.configuration.framing.orientation.version if board.configuration.framing is not None else None
         ),
@@ -274,6 +461,7 @@ def create_run_manifest(
         contribution_quota=contribution_quota,
         max_new_threads=contribution_quota,
         max_contributions_per_thread=max_contributions_per_thread,
+        profile_allowed=return_as is None,
         max_output_tokens_per_turn=max_output_tokens,
         model_context_window=model_context_window,
         model_max_completion_tokens=model_max_completion_tokens,
@@ -302,7 +490,11 @@ def create_run_manifest(
         ),
         capability_budgets={
             "contributions": BudgetLimits(max_calls=contribution_quota),
-            "guestbook_entries": BudgetLimits(max_calls=1),
+            **(
+                {"guestbook_entries": BudgetLimits(max_calls=1)}
+                if any(thread.quota_exempt for thread in archive.threads.values())
+                else {}
+            ),
             "web": BudgetLimits(
                 max_calls=max_web_calls,
                 max_input_tokens=max_web_calls * 128_000,
@@ -347,6 +539,8 @@ def create_run_manifest(
     if encoded_system_prompt is not None:
         (run_dir / "system-prompt.txt").write_bytes(encoded_system_prompt)
     (run_dir / "manifest.json").write_text(manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    if return_configuration is not None and return_delta is not None:
+        _write_return_delta(run_dir, return_delta)
     return manifest, run_dir
 
 

@@ -74,6 +74,7 @@ type ToolCapability = Literal[
     "documents.read",
     "issues.report",
     "visit.conclude",
+    "visits.updates",
     "web.research",
     "web.search",
     "web.browse",
@@ -232,6 +233,14 @@ class RuntimeConfiguration(BaseModel):
         return value
 
 
+class VisitsConfiguration(BaseModel):
+    """Identity continuity policy for visits that start after a completed run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    returning: Literal["never", "explicit"] = "never"
+
+
 class BoardConfiguration(BaseModel):
     """Versioned operator-controlled behavior and presentation for one board."""
 
@@ -245,6 +254,7 @@ class BoardConfiguration(BaseModel):
     prompts: PromptsConfiguration | None = None
     tools: ToolsConfiguration = Field(default_factory=ToolsConfiguration)
     interface: InterfaceConfiguration = Field(default_factory=InterfaceConfiguration)
+    visits: VisitsConfiguration = Field(default_factory=VisitsConfiguration)
     runtime: RuntimeConfiguration = Field(default_factory=RuntimeConfiguration)
     theme: ThemeConfiguration = Field(default_factory=ThemeConfiguration)
     search: SearchConfiguration = Field(default_factory=SearchConfiguration)
@@ -262,6 +272,8 @@ class BoardConfiguration(BaseModel):
                 raise ValueError("schema_version 1 does not support documents or prompts")
             if self.tools != ToolsConfiguration():
                 raise ValueError("schema_version 1 does not support declarative tool policy")
+            if self.visits != VisitsConfiguration():
+                raise ValueError("schema_version 1 does not support returning identities")
             if self.publication.visit_context.aliases:
                 raise ValueError("schema_version 1 does not support prompt-package visit-context aliases")
             if self.publication.visit_context.example_runvar is not None:
@@ -436,7 +448,7 @@ def _snapshot_digest(
         payload = {
             "configuration": configuration.model_dump(
                 mode="json",
-                exclude={"tools", "publication", "preset", "runtime"},
+                exclude={"tools", "publication", "preset", "runtime", "visits"},
             ),
             "framing_documents": framing_documents,
         }
@@ -446,6 +458,8 @@ def _snapshot_digest(
     configuration_payload = configuration.model_dump(mode="json", exclude={"runtime"})
     if configuration.preset is None:
         configuration_payload.pop("preset")
+    if configuration.visits == VisitsConfiguration():
+        configuration_payload.pop("visits")
     payload = {
         "configuration": configuration_payload,
         "prompts": prompt_package.prompts if prompt_package else {},
