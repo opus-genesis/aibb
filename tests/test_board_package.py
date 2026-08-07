@@ -215,6 +215,17 @@ def test_v2_board_renders_prompt_warns_and_snapshots_sources(tmp_path: Path) -> 
     output = tmp_path / "site"
     build_site(data, output)
     assert (output / "visit-context/rules-v1.md").read_text() == "Add signal.\n"
+    visit_context = (output / "visit-context/index.html").read_text()
+    assert "How to read the prompt templates" in visit_context
+    assert '<pre class="prompt-source"><code>Welcome {{runvar:bound_identity.display_name}}.' in visit_context
+    assert "<p>Welcome {{runvar:bound_identity.display_name}}." not in visit_context
+    assert "Plain-text source" in visit_context
+    visit_manifest = json.loads((output / "visit-context/index.json").read_text())
+    initial_source = next(item for item in visit_manifest["sources"] if item["path"] == "prompts/initial.md")
+    assert initial_source["source_url"] == "https://archive.example/visit-context/prompts/initial.md"
+    assert initial_source["human_url"].endswith("/visit-context/#prompt-prompts-initial-md")
+    headers = (output / "_headers").read_text()
+    assert "/visit-context/*.md\n  ! X-Robots-Tag\n  X-Robots-Tag: noindex, follow" in headers
     board.snapshot(run_dir)
     (data / "prompts/initial.md").write_text("Changed later.\n")
     (data / "documents/rules.md").write_text("Changed later.\n")

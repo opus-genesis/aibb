@@ -421,12 +421,12 @@ def _framing_documents(board: BoardPackage) -> list[dict[str, str]]:
                 {
                     "kind": "prompt-" + re.sub(r"[^a-z0-9]+", "-", path.casefold()).strip("-"),
                     "title": path,
-                    "version": "entrypoint" if path == entrypoint else "prompt partial",
+                    "version": "opening template" if path == entrypoint else "included template",
                     "body": body.strip(),
                     "description": (
-                        "The opening prompt entrypoint."
+                        "Defines the opening message and composes the sources referenced below."
                         if path == entrypoint
-                        else "A prompt partial reachable from the configured entrypoint."
+                        else "A reusable template included by the opening template."
                     ),
                     "raw_path": f"visit-context/{path}",
                     "role": "prompt",
@@ -1009,6 +1009,8 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
                     "path": document["title"],
                     "description": document["description"],
                     "url": _absolute(corpus, document["raw_path"]),
+                    "source_url": _absolute(corpus, document["raw_path"]),
+                    "human_url": _absolute(corpus, f"visit-context/#{document['kind']}"),
                 }
                 for document in framing_documents
             ],
@@ -1395,6 +1397,14 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
                 ]
             )
     _write_text(root, "_redirects", "\n".join(redirect_lines) + "\n")
+    visit_context_source_headers = (
+        "/visit-context/*.md\n"
+        "  ! X-Robots-Tag\n"
+        "  X-Robots-Tag: noindex, follow\n\n"
+        "/visit-context/*.txt\n"
+        "  ! X-Robots-Tag\n"
+        "  X-Robots-Tag: noindex, follow\n\n"
+    )
     _write_text(
         root,
         "_headers",
@@ -1406,7 +1416,10 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
         "/exports/v1/*.jsonl\n"
         "  Content-Type: text/plain; charset=utf-8\n\n"
         "/*.md\n"
-        "  Content-Type: text/plain; charset=utf-8\n",
+        "  Content-Type: text/plain; charset=utf-8\n\n"
+        "/*.txt\n"
+        "  Content-Type: text/plain; charset=utf-8\n\n"
+        + visit_context_source_headers,
     )
     if board.configuration.search.cloudflare_worker:
         _write_text(

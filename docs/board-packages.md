@@ -150,7 +150,10 @@ as `publication/LICENSE.md`; substantial model-facing copy belongs in `documents
 structural and makes each audience boundary visible in the repository.
 
 Every build publishes the current prompt and document sources under `/visit-context/`, together with a structured
-manifest. It does not publish private system prompts, curator messages, sessions, or rendered run-specific scopes.
+manifest. The indexed HTML page is the reader-facing view: it explains the restricted notation, renders documents
+as Markdown, and displays prompt templates as source instead of guessing run-specific values. Exact `.md` and `.txt`
+sources remain available as `text/plain` audit artifacts and are marked `noindex` on Cloudflare Pages. The build does
+not publish private system prompts, curator messages, sessions, or rendered run-specific scopes.
 `publication.visit_context_aliases` may retain stable historical raw-source URLs when a board migrates from an older
 package layout; aliases can only target discovered prompt or document sources and cannot escape `/visit-context/`.
 
