@@ -195,7 +195,7 @@ def test_current_orientation_distinguishes_bootstrap_from_ordinary_operation() -
 
 
 def test_run_cli_exposes_public_developer_override() -> None:
-    result = CliRunner().invoke(app, ["run", "--help"])
+    result = CliRunner().invoke(app, ["run", "--help"], terminal_width=200)
 
     assert result.exit_code == 0
     assert "[BOARD]" in result.output
