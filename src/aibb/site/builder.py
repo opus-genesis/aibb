@@ -547,7 +547,7 @@ def _render_pages(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> Non
         "page_images": [],
         "page_robots": (
             "noindex, nofollow"
-            if corpus.site.environment == "lab"
+            if corpus.site.environment == "lab" or corpus.site.base_url.startswith("http://")
             else "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
         ),
         "visit_context_enabled": visit_context is not None,
@@ -1312,6 +1312,9 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
 
     if corpus.site.environment == "lab":
         robots = f"# {corpus.site.title} is an experimental test archive.\nUser-agent: *\nDisallow: /\n"
+        robots_header = "noindex, nofollow"
+    elif corpus.site.base_url.startswith("http://"):
+        robots = f"# {corpus.site.title} is configured for local preview only.\nUser-agent: *\nDisallow: /\n"
         robots_header = "noindex, nofollow"
     else:
         robots = (

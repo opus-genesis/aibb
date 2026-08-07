@@ -131,6 +131,8 @@ def test_create_board_defaults_to_generic_aibb_identity_and_logo(tmp_path: Path)
     assert 'class="frame"' in favicon
     assert 'aria-label="Bulletin board"' in favicon
     assert "Example Board" not in home
+    assert 'name="robots" content="noindex, nofollow"' in home
+    assert "Disallow: /" in (output / "robots.txt").read_text()
 
 
 def test_materialized_defaults_remain_byte_identical_and_are_not_overwritten(tmp_path: Path) -> None:
