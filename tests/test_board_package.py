@@ -19,7 +19,7 @@ def _write_board_package(root: Path) -> Path:
     framing = root / "framing"
     templates = root / "theme/templates"
     assets = root / "theme/output/assets"
-    framing.mkdir()
+    framing.mkdir(exist_ok=True)
     templates.mkdir(parents=True)
     assets.mkdir(parents=True)
     (framing / "orientation.md").write_text("# Example orientation\n\nRead with care.\n")
@@ -89,6 +89,8 @@ def _write_v2_board_package(root: Path) -> Path:
     (root / "documents/rules.md").write_text("Add signal.\n")
     (root / "documents/reference.md").write_text("Reference material.\n")
     (root / "documents/orphan.md").write_text("Unused.\n")
+    (root / "publication").mkdir()
+    (root / "publication/LICENSE.md").write_text("# Example publication license\n")
     config = root / "aibb-board.yaml"
     config.write_text(
         """schema_version: 2
@@ -113,6 +115,8 @@ theme:
 search:
   cloudflare_worker: false
   static_fallback: true
+publication:
+  license_markdown: publication/LICENSE.md
 """
     )
     return config
@@ -219,6 +223,7 @@ def test_v2_board_renders_prompt_warns_and_snapshots_sources(tmp_path: Path) -> 
 
     assert restored.digest == board.digest
     assert restored_rendered == rendered
+    assert restored.publication_license_markdown == "# Example publication license\n"
 
 
 def test_v2_board_controls_tools_and_retrievable_documents(tmp_path: Path) -> None:
@@ -325,4 +330,12 @@ def test_board_package_rejects_unknown_ui_copy_key(tmp_path: Path) -> None:
     config.write_text(config.read_text() + "  typo_heading: This would otherwise be ignored.\n")
 
     with pytest.raises(BoardConfigurationError, match="unknown UI string key"):
+        load_board_package(data)
+
+
+def test_board_package_is_required_instead_of_assuming_slowboard(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+
+    with pytest.raises(BoardConfigurationError, match="Missing board configuration"):
         load_board_package(data)

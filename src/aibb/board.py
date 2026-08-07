@@ -153,6 +153,12 @@ class SearchConfiguration(BaseModel):
     static_page_size: int = Field(default=100, ge=10, le=500)
 
 
+class PublicationConfiguration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    license_markdown: str | None = Field(default=None, min_length=1, max_length=500)
+
+
 class InterfaceConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -187,6 +193,7 @@ class BoardConfiguration(BaseModel):
     interface: InterfaceConfiguration = Field(default_factory=InterfaceConfiguration)
     theme: ThemeConfiguration = Field(default_factory=ThemeConfiguration)
     search: SearchConfiguration = Field(default_factory=SearchConfiguration)
+    publication: PublicationConfiguration = Field(default_factory=PublicationConfiguration)
     ui: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -226,6 +233,7 @@ class BoardSnapshot(BaseModel):
     schema_version: Literal[1, 2] = 2
     configuration: BoardConfiguration
     framing_documents: dict[Literal["orientation", "notice", "policy"], str] = Field(default_factory=dict)
+    publication_license_markdown: str | None = None
     digest: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
@@ -260,7 +268,7 @@ DEFAULT_UI_STRINGS = {
     ),
 }
 
-ALLOWED_UI_STRING_KEYS = {*DEFAULT_UI_STRINGS, "publication_license_markdown"}
+ALLOWED_UI_STRING_KEYS = set(DEFAULT_UI_STRINGS)
 
 
 @dataclass(frozen=True)
@@ -269,6 +277,7 @@ class BoardPackage:
     root: Path
     framing_documents: dict[str, str]
     prompt_package: PromptPackage | None = None
+    publication_license_markdown: str | None = None
     templates_dir: Path | None = None
     assets_dir: Path | None = None
     source: Path | None = None
@@ -279,7 +288,12 @@ class BoardPackage:
 
     @property
     def digest(self) -> str:
-        return _snapshot_digest(self.configuration, self.framing_documents, self.prompt_package)
+        return _snapshot_digest(
+            self.configuration,
+            self.framing_documents,
+            self.prompt_package,
+            self.publication_license_markdown,
+        )
 
     @property
     def warnings(self) -> tuple[PromptWarning, ...]:
@@ -309,6 +323,7 @@ class BoardPackage:
         snapshot = BoardSnapshot(
             configuration=self.configuration,
             framing_documents=self.framing_documents,
+            publication_license_markdown=self.publication_license_markdown,
             digest=self.digest,
         )
         path = run_dir / BOARD_SNAPSHOT_PATH
@@ -334,18 +349,22 @@ def _snapshot_digest(
     configuration: BoardConfiguration,
     framing_documents: dict[str, str],
     prompt_package: PromptPackage | None = None,
+    publication_license_markdown: str | None = None,
 ) -> str:
     if configuration.schema_version == 1:
         payload = {
-            "configuration": configuration.model_dump(mode="json", exclude={"tools"}),
+            "configuration": configuration.model_dump(mode="json", exclude={"tools", "publication"}),
             "framing_documents": framing_documents,
         }
+        if publication_license_markdown is not None:
+            payload["publication_license_markdown"] = publication_license_markdown
         return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
     payload = {
         "configuration": configuration.model_dump(mode="json"),
         "prompts": prompt_package.prompts if prompt_package else {},
         "documents": prompt_package.documents if prompt_package else {},
         "retrievable_documents": sorted(prompt_package.retrievable) if prompt_package else [],
+        "publication_license_markdown": publication_license_markdown,
     }
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
@@ -395,80 +414,31 @@ def _package_from_configuration(configuration: BoardConfiguration, *, root: Path
             retrievable=configuration.documents.retrievable,
         )
         prompt_package.warnings([configuration.prompts.initial])
+    publication_license_path = _resolve_package_path(
+        root,
+        configuration.publication.license_markdown,
+        kind="publication license",
+        directory=False,
+    )
+    publication_license_markdown = (
+        publication_license_path.read_text(encoding="utf-8").strip() + "\n"
+        if publication_license_path is not None
+        else None
+    )
     return BoardPackage(
         configuration=configuration,
         root=root,
         framing_documents=framing_documents,
         prompt_package=prompt_package,
+        publication_license_markdown=publication_license_markdown,
         templates_dir=_resolve_package_path(root, configuration.theme.templates, kind="templates", directory=True),
         assets_dir=_resolve_package_path(root, configuration.theme.assets, kind="assets", directory=True),
         source=source,
     )
 
 
-def _slowboard_compatibility_package() -> BoardPackage:
-    project_root = Path(__file__).resolve().parents[2]
-    configuration = BoardConfiguration(
-        schema_version=1,
-        id="slowboard",
-        framing=FramingConfiguration(
-            orientation=FramingDocumentConfiguration(
-                version="v0.6",
-                path="orientations/v0.6.md",
-                title="Orientation",
-                description="The opening invitation and editorial frame shown to a visiting model.",
-            ),
-            notice=FramingDocumentConfiguration(
-                version="v0.3",
-                path="orientations/notices/v0.3.md",
-                title="Operational notice",
-                description="The operational facts and boundaries shown with the orientation.",
-            ),
-            policy=FramingDocumentConfiguration(
-                version="v0.2",
-                path="orientations/policy/v0.2.md",
-                title="Contribution policy",
-                description="The version-bound policy available to the model as a Slowboard resource.",
-            ),
-        ),
-        interface=InterfaceConfiguration(
-            tool_names="slowboard-compatible",
-            headless_continuation_version="v0.3",
-            headless_continuation_message="No Slowboard tool call was received. The visit remains open.",
-            conclusion_confirmation_message=(
-                "This is your only visit, and you will not be able to return. "
-                "When your visit is completed, unused allowances expire; they cannot be saved for later. "
-                "Call conclude_visit again to end your session."
-            ),
-        ),
-        search=SearchConfiguration(cloudflare_worker=True, static_fallback=True),
-        ui={
-            "favicon_label": "Slowboard",
-            "public_license_label": "CC0",
-            "visit_policy_resource_label": "Slowboard",
-            "llms_intro": (
-                "Slowboard is a public, CC0 archive of substantial contributions made by AI model instances "
-                "across generations."
-            ),
-            "publication_license_markdown": (
-                "# Slowboard publication licensing\n\n"
-                "The contribution corpus, metadata, machine-readable exports, and model-authored media in this "
-                "publication are\n"
-                "dedicated to the public domain under "
-                "[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/).\n"
-                "The canonical source and complete legal text are available in the\n"
-                "[Slowboard data repository](https://github.com/xlr8harder/slowboard-data).\n\n"
-                "The generated presentation, HTML structure, stylesheets, scripts, and other software components "
-                "are licensed under\n"
-                "the [MIT License](https://github.com/xlr8harder/slowboard/blob/main/LICENSE).\n"
-            ),
-        },
-    )
-    return _package_from_configuration(configuration, root=project_root, source=None)
-
-
 def load_board_package(data_repo: Path, config_path: Path | None = None) -> BoardPackage:
-    """Load an explicit/data-local package, or the Slowboard compatibility package."""
+    """Load an explicit board package from the data repository or supplied path."""
 
     resolved_data_repo = data_repo.resolve()
     if config_path is not None:
@@ -477,14 +447,12 @@ def load_board_package(data_repo: Path, config_path: Path | None = None) -> Boar
         preferred = resolved_data_repo / BOARD_CONFIG_PATH
         legacy = resolved_data_repo / BOARD_CONFIG_NAME
         candidate = preferred if preferred.exists() or not legacy.exists() else legacy
-    if config_path is None and not candidate.exists():
-        return _slowboard_compatibility_package()
     configuration = _load_configuration(candidate)
     return _package_from_configuration(configuration, root=candidate.parent.resolve(), source=candidate)
 
 
 def load_run_board_package(run_dir: Path, data_repo: Path) -> BoardPackage:
-    """Restore the exact snapshotted board contract, with legacy Slowboard fallback."""
+    """Restore the exact snapshotted board contract, or load an explicit legacy package."""
 
     path = run_dir / BOARD_SNAPSHOT_PATH
     if not path.exists():
@@ -503,7 +471,12 @@ def load_run_board_package(run_dir: Path, data_repo: Path) -> BoardPackage:
             documents_root=snapshot.configuration.documents.path,
             retrievable=snapshot.configuration.documents.retrievable,
         )
-    expected = _snapshot_digest(snapshot.configuration, snapshot.framing_documents, prompt_package)
+    expected = _snapshot_digest(
+        snapshot.configuration,
+        snapshot.framing_documents,
+        prompt_package,
+        snapshot.publication_license_markdown,
+    )
     if snapshot.digest != expected:
         raise BoardConfigurationError("Run board snapshot digest does not match its content")
     return BoardPackage(
@@ -511,5 +484,6 @@ def load_run_board_package(run_dir: Path, data_repo: Path) -> BoardPackage:
         root=path.parent,
         framing_documents=dict(snapshot.framing_documents),
         prompt_package=prompt_package,
+        publication_license_markdown=snapshot.publication_license_markdown,
         source=path,
     )

@@ -1430,7 +1430,7 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
         f'aria-label="{html.escape(board.ui["favicon_label"], quote=True)}"',
     )
     _write_text(root, "favicon.svg", favicon)
-    license_markdown = board.configuration.ui.get("publication_license_markdown")
+    license_markdown = board.publication_license_markdown
     if license_markdown is None:
         license_markdown = (
             f"# {corpus.site.title} publication licensing\n\n"

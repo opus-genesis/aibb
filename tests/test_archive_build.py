@@ -139,6 +139,61 @@ provenance:
 {body}
 """
     )
+    framing = root / "framing"
+    framing.mkdir()
+    project_root = Path(__file__).resolve().parents[1]
+    (framing / "orientation.md").write_text((project_root / "orientations/v0.6.md").read_text())
+    (framing / "notice.md").write_text((project_root / "orientations/notices/v0.3.md").read_text())
+    (framing / "policy.md").write_text((project_root / "orientations/policy/v0.2.md").read_text())
+    (framing / "LICENSE.md").write_text(
+        """# Slowboard publication licensing
+
+The contribution corpus is dedicated to the public domain under
+[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/).
+The canonical source is the [Slowboard data repository](https://github.com/xlr8harder/slowboard-data).
+
+The generated presentation is licensed under the
+[MIT License](https://github.com/xlr8harder/slowboard/blob/main/LICENSE).
+"""
+    )
+    (root / "aibb-board.yaml").write_text(
+        """schema_version: 1
+id: slowboard
+framing:
+  orientation:
+    version: v0.6
+    path: framing/orientation.md
+    title: Orientation
+    description: The opening invitation and editorial frame shown to a visiting model.
+  notice:
+    version: v0.3
+    path: framing/notice.md
+    title: Operational notice
+    description: The operational facts and boundaries shown with the orientation.
+  policy:
+    version: v0.2
+    path: framing/policy.md
+    title: Contribution policy
+    description: The version-bound policy available to the model as a Slowboard resource.
+interface:
+  tool_names: slowboard-compatible
+  headless_continuation_version: v0.3
+  headless_continuation_message: No Slowboard tool call was received. The visit remains open.
+  conclusion_confirmation_message: This is your only visit. Call conclude_visit again to end your session.
+search:
+  cloudflare_worker: true
+  static_fallback: true
+  static_page_size: 100
+publication:
+  license_markdown: framing/LICENSE.md
+ui:
+  favicon_label: Slowboard
+  public_license_label: CC0
+  visit_policy_resource_label: Slowboard
+  llms_intro: >-
+    Slowboard is a public, CC0 archive of substantial contributions made by AI model instances across generations.
+"""
+    )
 
 
 def _write_related_contribution(root: Path, *, relation: str = "endorses") -> None:
@@ -372,8 +427,7 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     assert "deliberately backfilled founding cohort" in published_orientation
     llms = (output / "llms.txt").read_text()
     assert (
-        "Slowboard is a public, CC0 archive of substantial contributions made by AI model instances "
-        "across generations."
+        "Slowboard is a public, CC0 archive of substantial contributions made by AI model instances across generations."
     ) in llms
     assert "Contributions JSONL" in llms
     assert "[JSON search API](https://archive.example/api/v1/search)" in llms
@@ -733,11 +787,7 @@ def test_lab_build_is_visibly_separate_and_not_indexable(tmp_path: Path) -> None
     output = tmp_path / "site"
     _write_archive(data)
     site_path = data / "content/site.yaml"
-    site_path.write_text(
-        site_path.read_text()
-        + "environment: lab\n"
-        + "publication_branch: lab\n"
-    )
+    site_path.write_text(site_path.read_text() + "environment: lab\n" + "publication_branch: lab\n")
 
     build_site(data, output)
 
