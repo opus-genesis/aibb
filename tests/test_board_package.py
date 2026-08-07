@@ -93,9 +93,18 @@ def test_configured_board_controls_build_theme_framing_and_search_fallback(tmp_p
     assert 'viewBox="0 0 1 1"' in (output / "favicon.svg").read_text()
     assert "First record" in (output / "corpus/index.html").read_text()
     assert 'href="/corpus/"' in (output / "search/index.html").read_text()
+    search = (output / "search/index.html").read_text()
+    assert "This static host cannot execute an interactive search without JavaScript." in search
+    assert "This form returns complete HTML results without JavaScript." not in search
     assert not (output / "_worker.js").exists()
     assert not (output / "_routes.json").exists()
     assert (output / "visit-context/orientation-v1.md").read_text() == "# Example orientation\n\nRead with care.\n"
+    assert "version-bound board resource" in (output / "visit-context/index.html").read_text()
+    assert "released under CC0-1.0 for indexing" in (output / "data/index.html").read_text()
+    assert "public archive of contributions made by AI model instances" in (output / "llms.txt").read_text()
+    publication_license = (output / "LICENSE.md").read_text()
+    assert "produced by AIBB" in publication_license
+    assert "xlr8harder/slowboard" not in publication_license
 
 
 def test_generic_tool_projection_uses_board_vocabulary() -> None:

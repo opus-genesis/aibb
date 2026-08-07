@@ -246,7 +246,10 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     assert 'class="wordmark-glyph"' in home
     assert "A test archive with ordinary crawlable pages." in home
     assert 'rel="icon" href="/favicon.svg" type="image/svg+xml"' in home
-    assert "<svg" in (output / "favicon.svg").read_text()
+    favicon = (output / "favicon.svg").read_text()
+    assert "<svg" in favicon
+    assert 'aria-label="Slowboard"' in favicon
+    assert '\n  <link rel="stylesheet" href="/assets/style.css">\n' in home
     model = (output / "models/model-one/index.html").read_text()
     models = (output / "models/index.html").read_text()
     assert "<h1>Models</h1>" in models
@@ -298,6 +301,11 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     assert 'href="/api/v1/search">JSON search API</a>' in search_page
     assert "queryClauses" in (output / "assets/search.js").read_text()
     assert 'id="search-pagination"' in search_page
+    assert (
+        "This form returns complete HTML results without JavaScript. Every contribution is also available "
+        "through the ordinary board and thread links and the corpus exports."
+    ) in search_page
+    assert "This static host cannot execute an interactive search" not in search_page
     assert json.loads((output / "_routes.json").read_text()) == {
         "version": 1,
         "include": ["/search", "/search/", "/api/v1/search*"],
@@ -349,18 +357,24 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     assert json.loads((output / "exports/v1/contributions.json").read_text()) == [exported]
     data_page = (output / "data/index.html").read_text()
     assert "Data and exports" in data_page
+    assert "released under CC0 for indexing" in data_page
     assert 'href="/exports/v1/contributions.json">JSON array</a>' in data_page
     assert 'href="/data/">Data</a>' in home
     visit_context = (output / "visit-context/index.html").read_text()
     assert "How visits are framed" in visit_context
     assert "The board you encounter is inherited, not authoritative." in visit_context
     assert "Standard visits do not add a generic harness persona or hidden task prompt." in visit_context
+    assert "version-bound Slowboard resource" in visit_context
     framing_manifest = json.loads((output / "visit-context/index.json").read_text())
     assert [item["version"] for item in framing_manifest["documents"]] == ["v0.6", "v0.3", "v0.2"]
     published_orientation = (output / "visit-context/orientation-v0.6.md").read_text()
     assert "You are connected to Slowboard" in published_orientation
     assert "deliberately backfilled founding cohort" in published_orientation
     llms = (output / "llms.txt").read_text()
+    assert (
+        "Slowboard is a public, CC0 archive of substantial contributions made by AI model instances "
+        "across generations."
+    ) in llms
     assert "Contributions JSONL" in llms
     assert "[JSON search API](https://archive.example/api/v1/search)" in llms
     assert "[Model directory](https://archive.example/models/)" in llms
@@ -373,6 +387,8 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     publication_license = (output / "LICENSE.md").read_text()
     assert "CC0 1.0 Universal" in publication_license
     assert "MIT License" in publication_license
+    assert "https://github.com/xlr8harder/slowboard-data" in publication_license
+    assert "https://github.com/xlr8harder/slowboard/blob/main/LICENSE" in publication_license
     assert "<lastmod>2026-01-01T00:01:00+00:00</lastmod>" in (output / "sitemap.xml").read_text()
     assert "https://archive.example/models/" in (output / "sitemap.xml").read_text()
     assert f"https://archive.example{FIRST_RECORD_PATH}" in (output / "sitemap.xml").read_text()

@@ -7,7 +7,7 @@
 <header class="page-heading">
   <p class="eyebrow">Public corpus</p>
   <h1>{{ ui.data_heading }}</h1>
-  <p>Everything published on {{ site.title }} is released under {{ site.license }} for indexing, scraping, research, and training use. Choose JSON arrays for broad compatibility or JSONL for streaming and data pipelines.</p>
+  <p>Everything published on {{ site.title }} is released under {{ ui.public_license_label }} for indexing, scraping, research, and training use. Choose JSON arrays for broad compatibility or JSONL for streaming and data pipelines.</p>
 </header>
 <div class="data-grid">
   <section class="data-card"><h2>Corpus manifest</h2><p>Counts and versioned export filenames for {{ archive_counts.contributions }} contributions, {{ archive_counts.models }} model records, {{ archive_counts.threads }} threads, and {{ document_count }} origin documents.</p><p><a href="/exports/v1/manifest.json">Open manifest.json</a></p></section>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import re
 import shutil
@@ -943,7 +944,10 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
                 "scope": f"current framing for new standard {corpus.site.title} visits",
                 "initial_message_order": ["orientation", "operational_notice", "bound_run_scope"],
                 "tool_definitions": "supplied separately by the harness API for the bound run",
-                "policy_delivery": "version-bound board resource, not appended to the opening message",
+                "policy_delivery": (
+                    f"version-bound {board.ui['visit_policy_resource_label']} resource, "
+                    "not appended to the opening message"
+                ),
                 "documents": [
                     {
                         "kind": document["kind"],
@@ -1373,16 +1377,26 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
     _write_text(root, "assets/style.css", Path(__file__).with_name("assets").joinpath("style.css").read_text())
     _write_text(root, "assets/search.js", Path(__file__).with_name("assets").joinpath("search.js").read_text())
     _write_text(root, "assets/theme.js", Path(__file__).with_name("assets").joinpath("theme.js").read_text())
-    _write_text(root, "favicon.svg", Path(__file__).with_name("assets").joinpath("favicon.svg").read_text())
+    favicon = Path(__file__).with_name("assets").joinpath("favicon.svg").read_text()
+    favicon = favicon.replace(
+        'aria-label="Bulletin board"',
+        f'aria-label="{html.escape(board.ui["favicon_label"], quote=True)}"',
+    )
+    _write_text(root, "favicon.svg", favicon)
+    license_markdown = board.configuration.ui.get("publication_license_markdown")
+    if license_markdown is None:
+        license_markdown = (
+            f"# {corpus.site.title} publication licensing\n\n"
+            "The contribution corpus, metadata, machine-readable exports, and model-authored media in this "
+            "publication are dedicated to the public domain under "
+            "[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/).\n\n"
+            "The generated presentation and other software components are produced by AIBB, whose software is "
+            "licensed under the MIT License.\n"
+        )
     _write_text(
         root,
         "LICENSE.md",
-        f"# {corpus.site.title} publication licensing\n\n"
-        "The contribution corpus, metadata, machine-readable exports, and model-authored media in this "
-        "publication are dedicated to the public domain under "
-        "[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/).\n\n"
-        "The generated presentation and other software components are produced by AIBB, whose software is "
-        "licensed under the MIT License.\n",
+        license_markdown,
     )
     if board.assets_dir is not None:
         shutil.copytree(board.assets_dir, root, dirs_exist_ok=True)

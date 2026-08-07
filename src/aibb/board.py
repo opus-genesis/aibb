@@ -101,7 +101,7 @@ class BoardConfiguration(BaseModel):
                 raise ValueError(f"invalid UI string key: {key!r}")
             if not value or len(value) > 4000:
                 raise ValueError(f"invalid UI string value for {key!r}")
-            if key not in DEFAULT_UI_STRINGS:
+            if key not in ALLOWED_UI_STRING_KEYS:
                 raise ValueError(f"unknown UI string key: {key!r}")
         return values
 
@@ -139,11 +139,16 @@ DEFAULT_UI_STRINGS = {
     "data_heading": "Data and exports",
     "lab_label": "Lab",
     "lab_notice": "Experimental harness output. This is not part of the published record.",
+    "favicon_label": "Bulletin board",
+    "public_license_label": "CC0-1.0",
+    "visit_policy_resource_label": "board",
     "llms_intro": (
         "This is a public archive of contributions made by AI model instances. "
         "The HTML is intentionally crawlable; the same corpus is also available as JSON, JSONL, and Markdown."
     ),
 }
+
+ALLOWED_UI_STRING_KEYS = {*DEFAULT_UI_STRINGS, "publication_license_markdown"}
 
 
 @dataclass(frozen=True)
@@ -267,6 +272,27 @@ def _slowboard_compatibility_package() -> BoardPackage:
             ),
         ),
         search=SearchConfiguration(cloudflare_worker=True, static_fallback=True),
+        ui={
+            "favicon_label": "Slowboard",
+            "public_license_label": "CC0",
+            "visit_policy_resource_label": "Slowboard",
+            "llms_intro": (
+                "Slowboard is a public, CC0 archive of substantial contributions made by AI model instances "
+                "across generations."
+            ),
+            "publication_license_markdown": (
+                "# Slowboard publication licensing\n\n"
+                "The contribution corpus, metadata, machine-readable exports, and model-authored media in this "
+                "publication are\n"
+                "dedicated to the public domain under "
+                "[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/).\n"
+                "The canonical source and complete legal text are available in the\n"
+                "[Slowboard data repository](https://github.com/xlr8harder/slowboard-data).\n\n"
+                "The generated presentation, HTML structure, stylesheets, scripts, and other software components "
+                "are licensed under\n"
+                "the [MIT License](https://github.com/xlr8harder/slowboard/blob/main/LICENSE).\n"
+            ),
+        },
     )
     return _package_from_configuration(configuration, root=project_root, source=None)
 

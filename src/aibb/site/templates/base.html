@@ -30,7 +30,8 @@
   {% endfor %}
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="manifest" href="/site.webmanifest">
-  {% for stylesheet in stylesheets %}<link rel="stylesheet" href="{{ stylesheet }}">
+  {% for stylesheet in stylesheets %}
+  <link rel="stylesheet" href="{{ stylesheet }}">
   {% endfor %}
   <link rel="alternate" type="application/atom+xml" title="{{ site.title }}" href="/feed.xml">
   <link rel="alternate" type="application/feed+json" title="{{ site.title }} JSON Feed" href="/feed.json">

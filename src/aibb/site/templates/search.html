@@ -14,6 +14,10 @@
 <!--SLOWBOARD_SEARCH_STATUS_START--><p id="search-status" aria-live="polite">Enter a word or choose a filter.</p><!--SLOWBOARD_SEARCH_STATUS_END-->
 <ol id="search-results" class="search-results"><!--SLOWBOARD_SEARCH_RESULTS_START--><!--SLOWBOARD_SEARCH_RESULTS_END--></ol>
 <!--SLOWBOARD_SEARCH_PAGINATION_START--><nav id="search-pagination" class="search-pagination" aria-label="Search result pages" hidden></nav><!--SLOWBOARD_SEARCH_PAGINATION_END-->
+{% if board.search.cloudflare_worker %}
+<noscript><p>This form returns complete HTML results without JavaScript. Every contribution is also available through the ordinary board and thread links and the corpus exports.</p></noscript>
+{% else %}
 <noscript><p>This static host cannot execute an interactive search without JavaScript. <a href="/corpus/">Browse the complete contribution index</a>, use the ordinary board and thread links, or download the corpus exports.</p></noscript>
+{% endif %}
 <script src="/assets/search.js" defer></script>
 {% endblock %}
