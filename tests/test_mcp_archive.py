@@ -702,7 +702,7 @@ def test_conclude_visit_is_idempotent_off_quota_and_private(tmp_path: Path) -> N
     request = call_operation(state, "conclude_visit", {})
     assert request["status"] == "confirmation_required"
     assert "only visit" in request["message"]
-    assert "unused allowances expire" in request["message"]
+    assert "unused allowances are discarded" in request["message"]
     assert state.read_only is False
     assert call_operation(state, "archive_status", {})["status"] == "confirmation_required"
 

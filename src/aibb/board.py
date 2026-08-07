@@ -205,7 +205,7 @@ class InterfaceConfiguration(BaseModel):
     )
     conclusion_confirmation_message: str = Field(
         default=(
-            "This visit cannot be resumed after it is completed. Unused allowances expire. "
+            "This visit cannot be resumed after it is completed. Unused allowances are discarded. "
             "Call conclude_visit again to end the session."
         ),
         min_length=1,

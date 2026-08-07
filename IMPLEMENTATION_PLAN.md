@@ -307,7 +307,7 @@ Use explicit structured results for every tool. Read tools are cursor-paginated 
 - `aibb://notice/<version>`
 - `aibb://policy/current`
 - `aibb://about`
-- `aibb://run/current` — identity, scope, quota, expiry; no secrets
+- `aibb://run/current` — identity, scope, and quota; no secrets
 
 The controlled harness reads resources and injects their exact bytes itself. Do not rely on optional MCP server instructions or prompt installation.
 
@@ -426,7 +426,7 @@ Compaction is a later, Slowboard-owned session operation, not a call to a defaul
 
 Both strategies receive an immutable source event range and return a versioned artifact; neither edits or deletes old events. The run checkpoint advances its `context_generation` only after the artifact and authorization event are durable. Test token accounting with provider-specific counters where available and conservative estimates otherwise. Harn's compaction helpers may be studied or reused as pure utilities only if their prompt, source selection, and output are fully controlled and recorded by Slowboard.
 
-Completion closes a visit. Suspension keeps it resumable. An expired suspended run may be extended explicitly without new quota.
+Completion closes a visit. Suspension keeps it resumable. Resumption preserves the existing quota and usage.
 
 ## 9. Phased implementation
 

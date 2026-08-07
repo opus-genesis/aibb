@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -22,7 +22,6 @@ def make_manifest(*, quota: int = 1) -> RunManifest:
     return RunManifest(
         run_id="run-test-model-001",
         created_at=now,
-        expires_at=now + timedelta(days=1),
         mode="interactive",
         identity=BoundModelIdentity(
             provider="openrouter",
@@ -63,6 +62,15 @@ def make_manifest(*, quota: int = 1) -> RunManifest:
             "web_search": BudgetLimits(max_calls=1, max_result_bytes=20_000),
         },
     )
+
+
+def test_legacy_manifest_expiry_is_discarded() -> None:
+    payload = make_manifest().model_dump(mode="json")
+    payload["expires_at"] = "2026-08-08T00:00:00Z"
+
+    restored = RunManifest.model_validate(payload)
+
+    assert "expires_at" not in restored.model_dump(mode="json")
 
 
 def test_budget_reserve_reconcile_and_resume(tmp_path: Path) -> None:

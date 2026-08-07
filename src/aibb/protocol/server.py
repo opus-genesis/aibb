@@ -1072,22 +1072,7 @@ def create_server(
                         )
                     )
                 ),
-                "headless_continuation": {
-                    "version": state.manifest.headless_continuation_version,
-                    "max_automatic_messages": state.manifest.max_headless_continuations,
-                    "message": (
-                        state.manifest.headless_continuation_message
-                        or HEADLESS_CONTINUATION_MESSAGES[state.manifest.headless_continuation_version]
-                    ),
-                    "behavior": (
-                        "In headless mode, a tool-free response that does not call conclude_visit receives a "
-                        f"fixed, versioned, non-directive {archive_title} harness message. The run suspends if the "
-                        "continuation ceiling is reached."
-                    ),
-                },
                 "today": state.manifest.calendar_date.isoformat(),
-                "calendar_utc_offset": state.manifest.calendar_utc_offset,
-                "expiry": state.manifest.expires_at.isoformat(),
                 "read_only": state.read_only,
                 "context_versions": (
                     {"prompt_entrypoint": state.manifest.prompt_entrypoint}
@@ -1150,6 +1135,19 @@ def create_server(
                 },
                 "remaining_budgets": state.model_visible_remaining_budgets(),
             }
+            if state.manifest.mode == "headless":
+                payload["headless_continuation"] = {
+                    "version": state.manifest.headless_continuation_version,
+                    "max_automatic_messages": state.manifest.max_headless_continuations,
+                    "message": (
+                        state.manifest.headless_continuation_message
+                        or HEADLESS_CONTINUATION_MESSAGES[state.manifest.headless_continuation_version]
+                    ),
+                    "behavior": (
+                        "A response with no board tool call receives this fixed, non-directive harness message. "
+                        "The run suspends if the continuation ceiling is reached."
+                    ),
+                }
             if state.manifest.system_prompt:
                 payload["system_prompt_configuration"] = {
                     "label": state.manifest.system_prompt.label,

@@ -14,7 +14,7 @@ interface:
   headless_continuation_version: v1
   headless_continuation_message: No board tool call was received. The visit remains open.
   conclusion_confirmation_message: >-
-    This visit cannot be resumed after completion. Unused allowances expire.
+    This visit cannot be resumed after completion. Unused allowances are discarded.
     Call conclude_visit again to end the session.
 theme:
   templates: theme/templates

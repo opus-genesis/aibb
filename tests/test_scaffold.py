@@ -56,7 +56,6 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
                 "exact_model_id": "example/model",
                 "public_author_id": "example-model",
             },
-            "expiry": "2026-08-08T00:00:00Z",
             "contribution_rules": {
                 "total_finished_contribution_allowance": 3,
                 "max_new_threads_this_run": 1,

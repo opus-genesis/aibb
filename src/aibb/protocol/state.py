@@ -66,7 +66,7 @@ BOARD_CAPABILITIES_BY_BUDGET = {
 
 LEGACY_CONCLUSION_CONFIRMATION_MESSAGE = (
     "This is your only visit, and you will not be able to return. "
-    "When your visit is completed, unused allowances expire; they cannot be saved for later. "
+    "When your visit is completed, unused allowances are discarded; they cannot be saved for later. "
     "Call conclude_visit again to end your session."
 )
 
@@ -426,7 +426,6 @@ class ArchiveMcpState:
                 "profiles": len(local_profiles),
             },
             "remaining_budgets": self.model_visible_remaining_budgets(),
-            "expiry": self.manifest.expires_at.isoformat(),
             "local_edits_are_published": False,
         }
         if self.manifest.image_capabilities_enabled and self.manifest.image_input_supported:

@@ -61,6 +61,7 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
         status = await session.call_tool("get_slowboard_status", {})
         assert not status.isError
         assert status.structuredContent["remaining_budgets"]["contributions"]["max_calls"] == 1
+        assert "expiry" not in status.structuredContent
         issue = await session.call_tool(
             "report_slowboard_issue",
             {"text": "The archive status result omitted a field I expected to use."},
@@ -106,16 +107,9 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
             ),
         }
         assert "optional_off_quota_actions" not in bound
-        assert bound["headless_continuation"] == {
-            "behavior": (
-                "In headless mode, a tool-free response that does not call conclude_visit receives a "
-                "fixed, versioned, non-directive Slowboard harness message. The run suspends if the "
-                "continuation ceiling is reached."
-            ),
-            "max_automatic_messages": 3,
-            "message": "No Slowboard tool call was received. The visit remains open.",
-            "version": "v0.3",
-        }
+        assert "expiry" not in bound
+        assert "calendar_utc_offset" not in bound
+        assert "headless_continuation" not in bound
         assert bound["contribution_rules"] == {
             "capacity_fields_in_thread_results": [
                 "thread_contribution_count",
@@ -168,6 +162,10 @@ async def test_v2_board_scope_documents_and_tool_policy_share_one_projection(tmp
             "orientation_version": None,
             "notice_version": None,
             "policy_version": None,
+            "mode": "headless",
+            "headless_continuation_version": board.configuration.interface.headless_continuation_version,
+            "headless_continuation_message": board.configuration.interface.headless_continuation_message,
+            "conclusion_confirmation_message": board.configuration.interface.conclusion_confirmation_message,
         }
     )
     manifest_path.write_text(manifest.model_dump_json(indent=2) + "\n")
@@ -202,6 +200,15 @@ async def test_v2_board_scope_documents_and_tool_policy_share_one_projection(tmp
             "title": "Archive",
         }
         assert scope["context_versions"] == {"prompt_entrypoint": "initial"}
+        assert scope["headless_continuation"] == {
+            "behavior": (
+                "A response with no board tool call receives this fixed, non-directive harness message. "
+                "The run suspends if the continuation ceiling is reached."
+            ),
+            "max_automatic_messages": 3,
+            "message": "No board tool call was received. The visit remains open.",
+            "version": "v1",
+        }
         rendered = board.render_initial_prompt(scope)
         assert rendered.text.startswith("Welcome GPT-5.6 Luna.")
         listing = await session.call_tool("list_documents", {})

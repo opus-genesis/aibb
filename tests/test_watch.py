@@ -35,7 +35,6 @@ def _write_run(
         update={
             "run_id": run_id,
             "created_at": created_at,
-            "expires_at": created_at + timedelta(days=1),
             "identity": base_manifest.identity.model_copy(
                 update={"display_name": display_name, "model_name": f"example/{display_name}"}
             ),

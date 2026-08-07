@@ -107,7 +107,6 @@ class RunManifest(BaseModel):
     schema_version: int = 1
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{3,99}$")
     created_at: datetime
-    expires_at: datetime
     mode: str
     read_only: bool = False
     archive_title: str | None = Field(default=None, min_length=1, max_length=120)
@@ -156,7 +155,14 @@ class RunManifest(BaseModel):
     capability_budgets: dict[str, BudgetLimits] = Field(default_factory=dict)
     collision_override_reason: str | None = None
 
-    @field_validator("created_at", "expires_at")
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_expiry(cls, value: object) -> object:
+        if isinstance(value, dict) and "expires_at" in value:
+            return {key: item for key, item in value.items() if key != "expires_at"}
+        return value
+
+    @field_validator("created_at")
     @classmethod
     def require_timezone(cls, value: datetime) -> datetime:
         if value.tzinfo is None:
@@ -165,8 +171,6 @@ class RunManifest(BaseModel):
 
     @model_validator(mode="after")
     def coherent_scope(self) -> RunManifest:
-        if self.expires_at <= self.created_at:
-            raise ValueError("run expiry must be after creation")
         contribution_budget = self.capability_budgets.get("contributions")
         if contribution_budget and contribution_budget.max_calls != self.contribution_quota:
             raise ValueError("contributions capability max_calls must equal contribution_quota")

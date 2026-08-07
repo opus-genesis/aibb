@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -241,7 +241,6 @@ def create_run_manifest(
     manifest = RunManifest(
         run_id=run_id,
         created_at=now,
-        expires_at=now + timedelta(days=1),
         mode=mode,
         archive_title=site.title,
         archive_base_url=site.base_url,

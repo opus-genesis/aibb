@@ -132,7 +132,6 @@ def _manifest(fixture: dict[str, Any], board, *, title: str, base_url: str) -> R
     return RunManifest(
         run_id=source["run_id"],
         created_at=datetime.fromisoformat(limits["created_at"].replace("Z", "+00:00")),
-        expires_at=datetime.fromisoformat(limits["expires_at"].replace("Z", "+00:00")),
         mode="headless",
         archive_title=title,
         archive_base_url=base_url,
