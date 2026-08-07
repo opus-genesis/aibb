@@ -686,7 +686,13 @@ def _tools(
             archive_title=archive_title,
             generic_names=generic_names,
         )
-    image_staging_enabled = bool({"generate_image", "import_image"} & capabilities)
+    image_staging_enabled = any(
+        runtime_name in capabilities and (allowed_capabilities is None or board_capability in allowed_capabilities)
+        for runtime_name, board_capability in (
+            ("generate_image", "images.generate"),
+            ("import_image", "images.import"),
+        )
+    )
     contribution_fields = _contribution_fields(image_staging_enabled=image_staging_enabled)
     profile_properties: dict[str, object] = {
         "handle": {
@@ -1158,7 +1164,9 @@ def create_server(
                 }
             if not (state.manifest.image_capabilities_enabled and state.manifest.image_input_supported):
                 payload.pop("image_capabilities")
-            elif "generate_image" in state.manifest.capability_budgets:
+            elif "generate_image" in state.manifest.capability_budgets and (
+                board.allowed_tool_capabilities is None or "images.generate" in board.allowed_tool_capabilities
+            ):
                 payload["image_capabilities"]["generation_model"] = state.manifest.image_generation_model
             return [ReadResourceContents(json.dumps(payload, indent=2, sort_keys=True), "application/json")]
         raise McpDomainError(f"Unknown {archive_title} resource: {value}")

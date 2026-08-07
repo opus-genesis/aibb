@@ -107,6 +107,7 @@ tools:
   hide:
     - web.browse
     - threads.create
+    - images.generate
 interface:
   tool_names: generic
 theme:
@@ -240,7 +241,7 @@ def test_v2_board_controls_tools_and_retrievable_documents(tmp_path: Path) -> No
 
     tools = _tools(
         read_only=False,
-        capabilities={"ask", "browse"},
+        capabilities={"ask", "browse", "generate_image"},
         allowed_capabilities=board.allowed_tool_capabilities,
         document_access=True,
         archive_title="Example Board",
@@ -250,7 +251,10 @@ def test_v2_board_controls_tools_and_retrievable_documents(tmp_path: Path) -> No
     assert {"list_documents", "search_documents", "read_document", "research_current_web"} <= names
     assert "browse_current_events_source" not in names
     assert "start_new_thread_draft" not in names
+    assert "generate_image" not in names
     assert "start_reply_draft" in names
+    reply = next(tool for tool in tools if tool.name == "start_reply_draft")
+    assert "attachments" not in reply.inputSchema["properties"]
 
     listing = state.list_documents()
     assert listing["page"] == {"offset": 0, "returned": 1, "total": 1, "next_offset": None}

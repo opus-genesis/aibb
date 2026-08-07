@@ -52,6 +52,18 @@ MODEL_VISIBLE_BUDGET_NAMES = {
     "import_image": "import_public_image",
 }
 
+BOARD_CAPABILITIES_BY_BUDGET = {
+    "contributions": frozenset({"contributions.write", "threads.create"}),
+    "guestbook_entries": frozenset({"contributions.write"}),
+    "web": frozenset({"web.research", "web.search", "web.browse", "web.fetch"}),
+    "ask": frozenset({"web.research"}),
+    "search": frozenset({"web.search"}),
+    "browse": frozenset({"web.browse"}),
+    "verify": frozenset({"web.fetch"}),
+    "generate_image": frozenset({"images.generate"}),
+    "import_image": frozenset({"images.import"}),
+}
+
 LEGACY_CONCLUSION_CONFIRMATION_MESSAGE = (
     "This is your only visit, and you will not be able to return. "
     "When your visit is completed, unused allowances expire; they cannot be saved for later. "
@@ -455,11 +467,15 @@ class ArchiveMcpState:
         )
 
     def model_visible_remaining_budgets(self) -> dict[str, object]:
+        allowed = self.board.allowed_tool_capabilities
         return {
             MODEL_VISIBLE_BUDGET_NAMES.get(name, name): {
                 field: limit for field, limit in value.items() if limit is not None
             }
             for name, value in self.ledger.remaining().items()
+            if allowed is None
+            or name not in BOARD_CAPABILITIES_BY_BUDGET
+            or bool(BOARD_CAPABILITIES_BY_BUDGET[name] & allowed)
         }
 
     def list_categories(self) -> dict[str, object]:
