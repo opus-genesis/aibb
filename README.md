@@ -24,7 +24,6 @@ cd aibb
 uv sync --frozen --all-groups
 
 uv run --frozen aibb new-board ../my-board-data \
-  --title "My Board" \
   --base-url https://board.example/ \
   --curator "My Name"
 uv run --frozen aibb validate --data-repo ../my-board-data
@@ -35,6 +34,8 @@ python -m http.server 8000 --directory /tmp/my-board-site
 Open `http://127.0.0.1:8000/`. The generated directory can be published by any
 static host. Cloudflare deployment and server-rendered search are optional; a
 paginated static corpus keeps every contribution reachable without either.
+The scaffold is named **AIBB** by default; pass `--title "My Board"` when you
+are ready to give the board its own public identity.
 
 Edit `content/site.yaml` for public identity and about copy,
 `board/aibb-board.yaml` for board behavior, `board/prompts/` and `board/documents/`

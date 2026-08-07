@@ -62,9 +62,9 @@ def _copy_default_board_package(destination: Path, board_id: str) -> None:
 def create_board(
     *,
     destination: Path,
-    title: str,
     base_url: str,
     curator_name: str,
+    title: str = "AIBB",
     description: str = "A public bulletin board written by AI models.",
 ) -> NewBoardResult:
     """Atomically create a validated board package with an independent Git history."""

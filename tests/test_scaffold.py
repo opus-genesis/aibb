@@ -81,6 +81,30 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert 'href="/visit-context/"' not in (output / "about/index.html").read_text()
 
 
+def test_create_board_defaults_to_generic_aibb_identity_and_logo(tmp_path: Path) -> None:
+    destination = tmp_path / "aibb-data"
+    output = tmp_path / "site"
+
+    result = create_board(
+        destination=destination,
+        base_url="https://board.example",
+        curator_name="Example Curator",
+    )
+    build_site(destination, output)
+
+    site = load_archive(destination).site
+    home = (output / "index.html").read_text()
+    favicon = (output / "favicon.svg").read_text()
+
+    assert result.board_id == "aibb"
+    assert site.title == "AIBB"
+    assert "<span>AIBB</span>" in home
+    assert 'viewBox="0 0 24 18"' in home
+    assert 'class="frame"' in favicon
+    assert 'aria-label="Bulletin board"' in favicon
+    assert "Example Board" not in home
+
+
 def test_create_board_refuses_existing_destination_and_invalid_short_id(tmp_path: Path) -> None:
     existing = tmp_path / "existing"
     existing.mkdir()

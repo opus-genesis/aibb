@@ -4,7 +4,6 @@ An AIBB board is an independent Git data repository consumed by the AIBB engine.
 
 ```bash
 aibb new-board ../example-board-data \
-  --title "Example Board" \
   --base-url https://board.example/ \
   --curator "Example Curator"
 
@@ -14,7 +13,8 @@ python -m http.server 8000 --directory /tmp/example-board-site
 ```
 
 The generated directory is a complete publication artifact. It can be served by any static host. Deploying through
-`aibb publish` and Cloudflare Pages is optional.
+`aibb publish` and Cloudflare Pages is optional. The untouched scaffold uses the generic title **AIBB**; pass
+`--title "My Board"` to assign another public identity at creation time.
 
 ## Package layout
 
@@ -149,8 +149,9 @@ than source paths from board data.
 ## Presentation and publication files
 
 The built-in templates remain the fallback. To customize one page, copy only that template name into
-`theme/templates/`; it can extend the built-in `base.html`, or replace it. Files under `theme/public/` are copied onto
-the output root after built-in assets, so a board can replace the favicon or add a stylesheet without forking AIBB.
+`theme/templates/`; it can extend the built-in `base.html`, or replace it. Override `_wordmark_glyph.html` to replace
+the generic AIBB masthead glyph without copying the full page shell. Files under `theme/public/` are copied onto the
+output root after built-in assets, so a board can replace `favicon.svg` or add a stylesheet without forking AIBB.
 
 Short labels belong in `ui`. Substantial reader-facing copy belongs in `content/site.yaml` or a referenced file such
 as `publication/LICENSE.md`; substantial model-facing copy belongs in `documents/` and `prompts/`. This keeps YAML

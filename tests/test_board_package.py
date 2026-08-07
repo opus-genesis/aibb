@@ -29,6 +29,9 @@ def _write_board_package(root: Path) -> Path:
     (templates / "home.html").write_text(
         "{% extends 'base.html' %}{% block content %}<h1>Custom Example Board home</h1>{% endblock %}\n"
     )
+    (templates / "_wordmark_glyph.html").write_text(
+        '<svg class="wordmark-glyph custom-mark" aria-hidden="true"></svg>\n'
+    )
     (assets / "custom.css").write_text(".wordmark { color: rebeccapurple; }\n")
     (root / "theme/output/favicon.svg").write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><path d="M0 0h1v1H0z"/></svg>\n'
@@ -152,6 +155,7 @@ def test_configured_board_controls_build_theme_framing_and_search_fallback(tmp_p
     assert len(board.digest) == 64
     home = (output / "index.html").read_text()
     assert "Custom Example Board home" in home
+    assert 'class="wordmark-glyph custom-mark"' in home
     assert 'href="/assets/custom.css"' in home
     assert (output / "assets/custom.css").read_text() == ".wordmark { color: rebeccapurple; }\n"
     assert 'viewBox="0 0 1 1"' in (output / "favicon.svg").read_text()

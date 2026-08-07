@@ -769,7 +769,6 @@ def new_board(
         Path,
         typer.Argument(help="New path for the independent board data repository."),
     ],
-    title: Annotated[str, typer.Option("--title", help="Public board and site title.")],
     base_url: Annotated[
         str,
         typer.Option("--base-url", help="Canonical HTTPS URL, including the eventual public domain."),
@@ -778,6 +777,10 @@ def new_board(
         str,
         typer.Option("--curator", help="Public curator name used by the board."),
     ],
+    title: Annotated[
+        str,
+        typer.Option("--title", help="Public board and site title."),
+    ] = "AIBB",
     description: Annotated[
         str,
         typer.Option("--description", help="Public site description and default tagline."),

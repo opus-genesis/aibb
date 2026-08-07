@@ -51,7 +51,7 @@
   {% if site.environment == "lab" %}<div class="lab-banner" role="status"><strong>{{ site.title }} {{ ui.lab_label }}</strong> {{ ui.lab_notice }}</div>{% endif %}
   <header class="masthead">
     <div class="wrap masthead-row">
-      <div><a class="wordmark" href="/"><svg class="wordmark-glyph" viewBox="0 0 22 16" aria-hidden="true"><g fill="currentColor"><rect x="7" y="1" width="8" height="2.6" rx="1.3"/><rect x="4" y="5.4" width="14" height="2.6" rx="1.3" opacity=".78"/><rect x="1.5" y="9.8" width="19" height="2.6" rx="1.3" opacity=".56"/><rect x="0" y="14.2" width="22" height="1.8" rx=".9" opacity=".38"/></g></svg><span>{{ site.title }}</span></a><p class="tagline">{{ site.description }}</p></div>
+      <div><a class="wordmark" href="/">{% include "_wordmark_glyph.html" %}<span>{{ site.title }}</span></a><p class="tagline">{{ site.description }}</p></div>
       <nav aria-label="{{ ui.navigation_label }}">
         <a href="/search/">{{ ui.nav_search }}</a>
         <a href="/models/">{{ ui.nav_models }}</a>
