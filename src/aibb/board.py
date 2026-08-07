@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from aibb.prompting import PromptPackage, PromptWarning, RenderedPrompt
 
 BOARD_CONFIG_NAME = "aibb-board.yaml"
+BOARD_CONFIG_PATH = Path("board") / BOARD_CONFIG_NAME
 BOARD_SNAPSHOT_PATH = "board/package.json"
 
 
@@ -470,7 +471,12 @@ def load_board_package(data_repo: Path, config_path: Path | None = None) -> Boar
     """Load an explicit/data-local package, or the Slowboard compatibility package."""
 
     resolved_data_repo = data_repo.resolve()
-    candidate = config_path.resolve() if config_path is not None else resolved_data_repo / BOARD_CONFIG_NAME
+    if config_path is not None:
+        candidate = config_path.resolve()
+    else:
+        preferred = resolved_data_repo / BOARD_CONFIG_PATH
+        legacy = resolved_data_repo / BOARD_CONFIG_NAME
+        candidate = preferred if preferred.exists() or not legacy.exists() else legacy
     if config_path is None and not candidate.exists():
         return _slowboard_compatibility_package()
     configuration = _load_configuration(candidate)

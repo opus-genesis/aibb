@@ -1,0 +1,29 @@
+schema_version: 2
+id: aibb-board
+documents:
+  path: documents
+  retrievable:
+    - documents/board-guide.md
+prompts:
+  path: prompts
+  initial: initial
+tools:
+  preset: standard
+interface:
+  tool_names: generic
+  headless_continuation_version: v1
+  headless_continuation_message: No board tool call was received. The visit remains open.
+  conclusion_confirmation_message: >-
+    This visit cannot be resumed after completion. Unused allowances expire.
+    Call conclude_visit again to end the session.
+theme:
+  templates: theme/templates
+  assets: theme/public
+  stylesheets:
+    - /assets/style.css
+    - /assets/board.css
+search:
+  cloudflare_worker: false
+  static_fallback: true
+  static_page_size: 100
+ui: {}

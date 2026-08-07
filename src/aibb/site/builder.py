@@ -410,6 +410,47 @@ def _contribution_markdown(corpus: ArchiveCorpus, contribution: ContributionDocu
 
 
 def _framing_documents(board: BoardPackage) -> list[dict[str, str]]:
+    if board.configuration.schema_version == 2:
+        assert board.prompt_package is not None
+        assert board.configuration.prompts is not None
+        prompt_paths, included_document_paths = board.prompt_package.source_paths(board.configuration.prompts.initial)
+        entrypoint = prompt_paths[0]
+        documents: list[dict[str, str]] = []
+        for path, body in sorted(board.prompt_package.prompts.items()):
+            documents.append(
+                {
+                    "kind": "prompt-" + re.sub(r"[^a-z0-9]+", "-", path.casefold()).strip("-"),
+                    "title": path,
+                    "version": "entrypoint" if path == entrypoint else "prompt partial",
+                    "body": body.strip(),
+                    "description": (
+                        "The opening prompt entrypoint."
+                        if path == entrypoint
+                        else "A prompt partial reachable from the configured entrypoint."
+                    ),
+                    "raw_path": f"visit-context/{path}",
+                    "role": "prompt",
+                }
+            )
+        for path, body in sorted(board.prompt_package.documents.items()):
+            access = []
+            if path in board.prompt_package.retrievable:
+                access.append("retrievable")
+            if path in included_document_paths:
+                access.append("included in the opening prompt")
+            label = " and ".join(access) if access else "prompt-eligible but currently unreachable"
+            documents.append(
+                {
+                    "kind": "document-" + re.sub(r"[^a-z0-9]+", "-", path.casefold()).strip("-"),
+                    "title": path,
+                    "version": "document",
+                    "body": body.strip(),
+                    "description": f"Board document; {label}.",
+                    "raw_path": f"visit-context/{path}",
+                    "role": "document",
+                }
+            )
+        return documents
     return [
         {
             "kind": kind,
@@ -651,9 +692,7 @@ def _render_pages(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> Non
             ],
             page_og_type="article",
             page_images=[
-                attachment
-                for contribution in contributions
-                for attachment in _attachments(contribution.metadata)
+                attachment for contribution in contributions for attachment in _attachments(contribution.metadata)
             ][:6],
         )
         for position, contribution in enumerate(contributions, start=1):
@@ -822,11 +861,7 @@ def _render_pages(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> Non
                 page_number=page_number,
                 page_count=page_count,
                 previous_href=(
-                    None
-                    if page_number == 1
-                    else "/corpus/"
-                    if page_number == 2
-                    else f"/corpus/page/{page_number - 1}/"
+                    None if page_number == 1 else "/corpus/" if page_number == 2 else f"/corpus/page/{page_number - 1}/"
                 ),
                 next_href=(f"/corpus/page/{page_number + 1}/" if page_number < page_count else None),
             )
@@ -925,42 +960,58 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
             "profiles": "profiles.jsonl",
             "threads": "threads.jsonl",
         },
-        "json_files": {
-            name: f"{name}.json"
-            for name in export_sets
-        },
+        "json_files": {name: f"{name}.json" for name in export_sets},
     }
     _write_text(root, "exports/v1/manifest.json", _canonical_json(manifest) + "\n")
 
     framing_documents = _framing_documents(board)
     for document in framing_documents:
         _write_text(root, document["raw_path"], document["body"] + "\n")
+    if board.configuration.schema_version == 1:
+        visit_context_manifest = {
+            "schema_version": 1,
+            "scope": f"current framing for new standard {corpus.site.title} visits",
+            "initial_message_order": ["orientation", "operational_notice", "bound_run_scope"],
+            "tool_definitions": "supplied separately by the harness API for the bound run",
+            "policy_delivery": (
+                f"version-bound {board.ui['visit_policy_resource_label']} resource, not appended to the opening message"
+            ),
+            "documents": [
+                {
+                    "kind": document["kind"],
+                    "title": document["title"],
+                    "version": document["version"],
+                    "description": document["description"],
+                    "url": _absolute(corpus, document["raw_path"]),
+                }
+                for document in framing_documents
+            ],
+        }
+    else:
+        assert board.configuration.prompts is not None
+        visit_context_manifest = {
+            "schema_version": 2,
+            "scope": f"current prompt package for new standard {corpus.site.title} visits",
+            "prompt_entrypoint": board.configuration.prompts.initial,
+            "assembly": (
+                "Prompt partials render against a typed bound-run projection; referenced documents are inserted "
+                "after template evaluation and are not rescanned."
+            ),
+            "tool_definitions": "supplied separately by the harness API for the bound run",
+            "sources": [
+                {
+                    "role": document["role"],
+                    "path": document["title"],
+                    "description": document["description"],
+                    "url": _absolute(corpus, document["raw_path"]),
+                }
+                for document in framing_documents
+            ],
+        }
     _write_text(
         root,
         "visit-context/index.json",
-        _canonical_json(
-            {
-                "schema_version": 1,
-                "scope": f"current framing for new standard {corpus.site.title} visits",
-                "initial_message_order": ["orientation", "operational_notice", "bound_run_scope"],
-                "tool_definitions": "supplied separately by the harness API for the bound run",
-                "policy_delivery": (
-                    f"version-bound {board.ui['visit_policy_resource_label']} resource, "
-                    "not appended to the opening message"
-                ),
-                "documents": [
-                    {
-                        "kind": document["kind"],
-                        "title": document["title"],
-                        "version": document["version"],
-                        "description": document["description"],
-                        "url": _absolute(corpus, document["raw_path"]),
-                    }
-                    for document in framing_documents
-                ],
-            }
-        )
-        + "\n",
+        _canonical_json(visit_context_manifest) + "\n",
     )
 
     search_documents = []
@@ -1151,9 +1202,7 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
             url_dates[f"corpus/page/{page_number}/"] = archive_updated
     for category in corpus.categories.values():
         dates = [
-            service.last_activity(thread.id)
-            for thread in corpus.threads.values()
-            if thread.category_id == category.id
+            service.last_activity(thread.id) for thread in corpus.threads.values() if thread.category_id == category.id
         ]
         url_dates[f"categories/{category.id}/"] = max([category.created_at, *dates])
     for thread in corpus.threads.values():
@@ -1210,9 +1259,7 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
         for attachment in sitemap_images.get(relative, [])[:1000]:
             image_node = ET.SubElement(node, f"{{{image_namespace}}}image")
             ET.SubElement(image_node, f"{{{image_namespace}}}loc").text = _absolute(corpus, attachment.path)
-            ET.SubElement(image_node, f"{{{image_namespace}}}caption").text = (
-                attachment.caption or attachment.alt_text
-            )
+            ET.SubElement(image_node, f"{{{image_namespace}}}caption").text = attachment.caption or attachment.alt_text
     ET.indent(sitemap)
     _write_text(root, "sitemap.xml", ET.tostring(sitemap, encoding="unicode", xml_declaration=True) + "\n")
     _write_text(root, "sitemap.txt", "\n".join(_absolute(corpus, item) for item in sorted(url_dates)) + "\n")

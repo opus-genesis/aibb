@@ -213,8 +213,7 @@ class PromptPackage:
                 code="document-unreachable",
                 path=path,
                 message=(
-                    f"{path} is neither referenced by a prompt nor exposed for retrieval, "
-                    "so no model can encounter it."
+                    f"{path} is neither referenced by a prompt nor exposed for retrieval, so no model can encounter it."
                 ),
             )
             for path in sorted(self.documents.keys() - referenced_documents - set(self.retrievable))
@@ -228,6 +227,12 @@ class PromptPackage:
             for path in sorted(self.prompts.keys() - reachable_prompts)
         )
         return warnings
+
+    def source_paths(self, entrypoint: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Return the prompt and document sources statically reachable from one entrypoint."""
+
+        _, prompts, documents = self._source_graph(entrypoint)
+        return tuple(prompts), tuple(documents)
 
     def render(self, entrypoint: str, *, runvar: dict[str, Any]) -> RenderedPrompt:
         try:
@@ -268,4 +273,3 @@ class PromptPackage:
             source_sha256=hashlib.sha256(source.encode()).hexdigest(),
             rendered_sha256=hashlib.sha256(rendered.encode()).hexdigest(),
         )
-

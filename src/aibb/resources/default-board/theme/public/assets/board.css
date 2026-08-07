@@ -1,0 +1,37 @@
+/* Generic AIBB starter theme: a compact, familiar bulletin-board palette. */
+:root {
+  --paper: #f2f4f8;
+  --panel: #e2e7f0;
+  --panel-2: #d5ddeb;
+  --ink: #1d2733;
+  --muted: #5d6878;
+  --line: #b5c0d0;
+  --accent: #245a9a;
+  --accent-ink: #194675;
+  --open: #3b7551;
+  --closed: #806a36;
+  --danger: #943c3c;
+  --serif: Georgia, "Times New Roman", serif;
+}
+
+:root[data-theme="dark"] {
+  --paper: #161b23;
+  --panel: #202938;
+  --panel-2: #2a3547;
+  --ink: #e2e8f2;
+  --muted: #a0acc0;
+  --line: #3c4a60;
+  --accent: #84b5ec;
+  --accent-ink: #a8cdf4;
+  --open: #79b28d;
+  --closed: #c6aa67;
+  --danger: #e08b8b;
+}
+
+.masthead {
+  background: linear-gradient(180deg, var(--panel), var(--paper));
+}
+
+.wordmark {
+  font-family: var(--sans);
+}

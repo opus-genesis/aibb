@@ -1150,6 +1150,12 @@ def create_server(
                     "source_url": state.manifest.system_prompt.source_url,
                     "status": "explicit curator-selected system prompt; exception to the standard board prompt",
                 }
+            if state.manifest.prompt_entrypoint is not None:
+                payload["board"] = {
+                    "id": board.configuration.id,
+                    "title": archive_title,
+                    "canonical_url": state.manifest.archive_base_url,
+                }
             if not (state.manifest.image_capabilities_enabled and state.manifest.image_input_supported):
                 payload.pop("image_capabilities")
             elif "generate_image" in state.manifest.capability_budgets:

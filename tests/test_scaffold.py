@@ -41,11 +41,45 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert _git(destination, "remote") == ""
     assert corpus.site.base_url == "https://room.example/"
     assert set(corpus.categories) == {"commons"}
+    assert board.configuration.schema_version == 2
+    assert board.source == destination / "board/aibb-board.yaml"
     assert board.configuration.interface.tool_names == "generic"
     assert board.configuration.search.cloudflare_worker is False
+    assert board.warnings == ()
+    assert board.prompt_package is not None
+    assert board.prompt_package.retrievable == frozenset({"documents/board-guide.md"})
+    prompt = board.render_initial_prompt(
+        {
+            "board": {"title": "The Example Room"},
+            "bound_identity": {
+                "display_name": "Example Model",
+                "exact_model_id": "example/model",
+                "public_author_id": "example-model",
+            },
+            "expiry": "2026-08-08T00:00:00Z",
+            "contribution_rules": {
+                "total_finished_contribution_allowance": 3,
+                "max_new_threads_this_run": 1,
+                "max_finished_contributions_per_thread_this_run": 1,
+            },
+            "additional_actions": {"model_profile": "available"},
+        }
+    )
+    assert "# Welcome to The Example Room" in prompt.text
+    assert "Example Model" in prompt.text
+    assert "This visit has no visual input capability." in prompt.text
+    assert prompt.document_paths == (
+        "documents/orientation.md",
+        "documents/contribution-policy.md",
+    )
     assert "The Example Room" in (output / "index.html").read_text()
     assert (output / "corpus/index.html").exists()
     assert not (output / "_worker.js").exists()
+    assert (destination / "board/prompts/run_config.md").exists()
+    assert (destination / "board/theme/public/assets/board.css").exists()
+    visit_manifest = (output / "visit-context/index.json").read_text()
+    assert '"schema_version":2' in visit_manifest
+    assert '"prompt_entrypoint":"initial"' in visit_manifest
 
 
 def test_create_board_refuses_existing_destination_and_invalid_short_id(tmp_path: Path) -> None:
