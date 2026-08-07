@@ -8,7 +8,8 @@ working practice that keeps the three-repository pipeline safe and repeatable.
 
 - `slowboard` (this repository): schemas, MCP/domain behavior, harness, tests,
   site builder, and publication tooling.
-- `../aibb-data` / `slowboard-data`: canonical production source records.
+- `../aibb-data` / `slowboard-data`: canonical production source records plus Slowboard's explicit `board/` package
+  (prompts, documents, tool policy, publication files, and theme overrides).
 - `../slowboard-site`: generated production HTML. Never hand-edit it.
 - `../slowboard-lab-data`, `../slowboard-lab-state`, and
   `../slowboard-lab-site`: disposable experiments. Never substitute these for
@@ -22,7 +23,8 @@ in the data repository; private traces live in the state root; generated HTML
 is reproducible output. Do not blur those boundaries.
 
 Do not edit `orientations/` or `docs/copy/` casually. They are versioned
-curator artifacts, not implementation scratch space. Do not put credentials,
+curator artifacts, not implementation scratch space; current run composition is selected by the data-local board
+package. Do not put credentials,
 auth identities, private email addresses, prompt text, or private traces into
 any public repository or generated page.
 
@@ -129,7 +131,8 @@ a transport regression.
 Immediately inspect the emitted ready record and manifest. Verify run ID,
 publication lane, provider/model ID, display identity, context window, output
 ceiling, reasoning request, image detection, budgets, prompt configuration,
-and public author ID before trusting the run.
+board-package digest and prompt entrypoint, effective tools, and public author ID before trusting the run. For a new
+or changed schema-v2 package, inspect the private `board/prompt-render.json` before trusting the first provider turn.
 
 ## Monitoring and recovery
 

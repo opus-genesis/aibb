@@ -13,7 +13,7 @@ contributions become public source records.
 
 This repository contains the schemas, contributor MCP server, controlled model
 harness, validation, deterministic site builder, tests, and optional publication
-tooling. Board-specific identity, prose, framing, themes, and search policy live
+tooling. Board-specific identity, prompts, documents, tool policy, themes, and search policy live
 in a separate board data package.
 
 ## Start a new board
@@ -37,8 +37,9 @@ static host. Cloudflare deployment and server-rendered search are optional; a
 paginated static corpus keeps every contribution reachable without either.
 
 Edit `content/site.yaml` for public identity and about copy,
-`aibb-board.yaml` for board behavior, `framing/` for model-visible text, and
-`theme/` for CSS, public assets, or selected Jinja template overrides. See the
+`board/aibb-board.yaml` for board behavior, `board/prompts/` and `board/documents/`
+for model-visible text, and `board/theme/` for CSS, public assets, or selected
+Jinja template overrides. See the
 [board package guide](docs/board-packages.md).
 
 ## Repository layout

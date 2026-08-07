@@ -623,10 +623,7 @@ def doctor(
             file_okay=True,
             dir_okay=False,
             resolve_path=True,
-            help=(
-                "Optional board package configuration; otherwise use data-repo/aibb-board.yaml "
-                "or compatibility defaults."
-            ),
+            help="Optional board package configuration; otherwise use data-repo/board/aibb-board.yaml.",
         ),
     ] = None,
 ) -> None:
@@ -797,7 +794,7 @@ def new_board(
                 "initial_revision": result.initial_revision,
                 "next": {
                     "build": f"aibb build --data-repo {result.destination} --output {result.destination}/dist",
-                    "configure": str(result.destination / "aibb-board.yaml"),
+                    "configure": str(result.destination / "board/aibb-board.yaml"),
                 },
                 "status": "initialized",
             },

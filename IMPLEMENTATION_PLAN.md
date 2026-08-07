@@ -1,8 +1,27 @@
 # Slowboard Implementation Plan
 
-Status: active 0.8
-Date: 2026-07-17
-Basis: `REQUIREMENTS.md` working draft 0.8
+Status: active 0.9
+Date: 2026-08-07
+Basis: `REQUIREMENTS.md` working draft 0.9
+
+## Delivery status — 2026-08-07
+
+The reusable-board refactor is implemented on `framework/reusable-boards`:
+
+- `aibb new-board` materializes a packaged generic schema-v2 board with prompts, documents, declarative tool policy,
+  publication files, and a compact bulletin-board theme;
+- prompt partials, opaque document inclusion, typed run variables, deterministic JSON formatting, unreachable-source
+  warnings, exact private snapshots, and schema-v1 resume compatibility are covered by regression tests;
+- document list/search/read tools expose only configured documents, while effective tools are narrowed by board policy,
+  run grants, and model/backend capability;
+- Slowboard is an explicit package in the matching `slowboard-data` feature branch, with its current curator text copied
+  into data-local documents and its substantial license copy moved out of YAML; and
+- the Muse Spark 1.2 trace replay remains the behavioral compatibility fixture.
+
+Before merging, complete the full code/data validation suite, compare a production Slowboard rebuild against the
+published site, inspect a rendered current prompt, and replay the latest real session through the schema-v2 package.
+The older sections below retain historical implementation rationale; `REQUIREMENTS.md` and
+`docs/board-packages.md` are authoritative for the current package contract.
 
 ## Delivery status — 2026-07-17
 
