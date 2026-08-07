@@ -13,7 +13,7 @@ import typer
 from rich.console import Console
 
 from aibb import __version__
-from aibb.board import load_board_package
+from aibb.board import BoardPackage, load_board_package, load_run_board_package
 from aibb.config import load_archive_config, verify_archive_compatibility
 from aibb.curator import CuratorContributionError, create_curator_reply
 from aibb.domain import load_archive
@@ -70,6 +70,10 @@ app.add_typer(curator_app, name="curator")
 @app.callback()
 def main() -> None:
     """Operate an AIBB archive, model harness, and publication workflow."""
+
+
+def _board_warnings(board: BoardPackage) -> list[dict[str, str]]:
+    return [{"code": warning.code, "path": warning.path, "message": warning.message} for warning in board.warnings]
 
 
 def _default_code_repo() -> Path:
@@ -642,6 +646,7 @@ def doctor(
                 "data_repo": str(data_repo),
                 "schema_version": config.schema_version,
                 "status": "compatible",
+                "warnings": _board_warnings(board),
             },
             sort_keys=True,
         )
@@ -681,6 +686,7 @@ def validate_archive(
                 "profiles": len(corpus.profiles),
                 "status": "valid",
                 "threads": len(corpus.threads),
+                "warnings": _board_warnings(board),
             },
             sort_keys=True,
         )
@@ -1127,10 +1133,7 @@ def run_model(
             effective_cost_usd = max_cost_usd or max(
                 5.0,
                 max_provider_turns
-                * (
-                    estimated_input_per_turn * prompt_price
-                    + effective_output_tokens * completion_price
-                ),
+                * (estimated_input_per_turn * prompt_price + effective_output_tokens * completion_price),
             )
             if reasoning_mode not in {"auto", "disabled"}:
                 raise typer.BadParameter(f"{model} does not support Anthropic extended thinking")
@@ -1181,9 +1184,7 @@ def run_model(
         elif selected_provider == "amazon-bedrock":
             selected_region = bedrock_region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
             if not selected_region:
-                raise typer.BadParameter(
-                    "Amazon Bedrock requires --bedrock-region, AWS_REGION, or AWS_DEFAULT_REGION"
-                )
+                raise typer.BadParameter("Amazon Bedrock requires --bedrock-region, AWS_REGION, or AWS_DEFAULT_REGION")
             try:
                 catalog_model = amazon_bedrock_model(model, region=selected_region)
             except ValueError as error:
@@ -1322,6 +1323,13 @@ def run_model(
             board_config=board_config,
         )
         run_id = manifest.run_id
+        run_board = load_run_board_package(run_dir, data_repo)
+        board_warnings = _board_warnings(run_board)
+        for warning in board_warnings:
+            typer.echo(
+                f"Board warning [{warning['code']}] {warning['path']}: {warning['message']}",
+                err=True,
+            )
         typer.echo(
             json.dumps(
                 {
@@ -1364,6 +1372,12 @@ def run_model(
                         else None
                     ),
                     "publication_lane": site.environment,
+                    "board": {
+                        "id": run_board.configuration.id,
+                        "package_sha256": run_board.digest,
+                        "prompt_entrypoint": manifest.prompt_entrypoint,
+                        "warnings": board_warnings,
+                    },
                 },
                 sort_keys=True,
             )

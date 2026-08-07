@@ -13,7 +13,7 @@ from harn_ai.providers.faux import faux_assistant_message, faux_tool_call, regis
 from harn_ai.stream import stream_simple
 from harn_ai.types import TextContent
 from test_archive_build import _write_archive
-from test_board_package import _write_board_package
+from test_board_package import _write_board_package, _write_v2_board_package
 
 from aibb.board import load_board_package
 from aibb.domain import load_archive
@@ -118,6 +118,17 @@ def _write_replay_baseline(root: Path, fixture: dict[str, Any]) -> None:
 def _manifest(fixture: dict[str, Any], board, *, title: str, base_url: str) -> RunManifest:
     source = fixture["source"]
     limits = fixture["manifest"]
+    context_binding = (
+        {
+            "orientation_version": board.configuration.framing.orientation.version,
+            "notice_version": board.configuration.framing.notice.version,
+            "policy_version": board.configuration.framing.policy.version,
+        }
+        if board.configuration.schema_version == 1
+        else {
+            "prompt_entrypoint": board.configuration.prompts.initial,
+        }
+    )
     return RunManifest(
         run_id=source["run_id"],
         created_at=datetime.fromisoformat(limits["created_at"].replace("Z", "+00:00")),
@@ -136,9 +147,7 @@ def _manifest(fixture: dict[str, Any], board, *, title: str, base_url: str) -> R
             public_author_id=source["public_author_id"],
             display_name=source["display_name"],
         ),
-        orientation_version=board.configuration.framing.orientation.version,
-        notice_version=board.configuration.framing.notice.version,
-        policy_version=board.configuration.framing.policy.version,
+        **context_binding,
         contribution_quota=limits["contribution_quota"],
         max_new_threads=limits["max_new_threads"],
         max_contributions_per_thread=limits["max_contributions_per_thread"],
@@ -174,12 +183,19 @@ async def _replay(
     monkeypatch: pytest.MonkeyPatch,
     *,
     generic: bool,
+    schema_v2: bool = False,
 ) -> tuple[dict[str, bytes], list[str], list[dict[str, Any]]]:
     fixture = _fixture()
-    data = tmp_path / ("generic-data" if generic else "compatibility-data")
-    state_dir = tmp_path / ("generic-state" if generic else "compatibility-state")
+    variant = "schema-v2" if schema_v2 else "generic" if generic else "compatibility"
+    data = tmp_path / f"{variant}-data"
+    state_dir = tmp_path / f"{variant}-state"
     _write_replay_baseline(data, fixture)
-    if generic:
+    if schema_v2:
+        config_path = _write_v2_board_package(data)
+        configuration = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        configuration["tools"]["hide"] = []
+        _write_yaml(config_path, configuration)
+    elif generic:
         _write_board_package(data)
     board = load_board_package(data)
     corpus = load_archive(data)
@@ -203,13 +219,14 @@ async def _replay(
     execution_log: list[str] = []
     captured_contexts: list[dict[str, Any]] = []
     finish_created_at = {
-        key: datetime.fromisoformat(value.replace("Z", "+00:00"))
-        for key, value in fixture["finish_created_at"].items()
+        key: datetime.fromisoformat(value.replace("Z", "+00:00")) for key, value in fixture["finish_created_at"].items()
     }
 
     tool_specs = _tools(
         read_only=False,
         capabilities={"ask", "browse"},
+        allowed_capabilities=board.allowed_tool_capabilities,
+        document_access=bool(board.prompt_package and board.prompt_package.retrievable),
         archive_title=corpus.site.title,
         generic_names=generic,
     )
@@ -258,7 +275,7 @@ async def _replay(
     tools = [agent_tool(spec) for spec in tool_specs]
     registration = register_faux_provider(
         {
-            "api": f"aibb-real-replay-{'generic' if generic else 'compatibility'}",
+            "api": f"aibb-real-replay-{variant}",
             "provider": "aibb-replay",
         }
     )
@@ -298,10 +315,7 @@ async def _replay(
     finally:
         registration.unregister()
 
-    public_files = {
-        relative: (data / relative).read_bytes()
-        for relative in fixture["public_file_sha256"]
-    }
+    public_files = {relative: (data / relative).read_bytes() for relative in fixture["public_file_sha256"]}
     return public_files, execution_log, captured_contexts
 
 
@@ -321,20 +335,28 @@ async def test_latest_real_session_replays_identically_through_generic_harness(
         monkeypatch,
         generic=True,
     )
+    schema_v2_files, schema_v2_calls, schema_v2_contexts = await _replay(
+        tmp_path,
+        monkeypatch,
+        generic=True,
+        schema_v2=True,
+    )
 
     assert generic_files == compatibility_files
-    assert {
-        relative: hashlib.sha256(value).hexdigest()
-        for relative, value in generic_files.items()
-    } == fixture["public_file_sha256"]
+    assert schema_v2_files == compatibility_files
+    assert {relative: hashlib.sha256(value).hexdigest() for relative, value in generic_files.items()} == fixture[
+        "public_file_sha256"
+    ]
     assert len(compatibility_contexts) == fixture["source"]["provider_turn_count"]
     assert len(generic_contexts) == fixture["source"]["provider_turn_count"]
+    assert len(schema_v2_contexts) == fixture["source"]["provider_turn_count"]
     assert "get_slowboard_status" in compatibility_calls
     assert "get_board_status" in generic_calls
     assert "read_slowboard_thread" in compatibility_calls
     assert "read_thread" in generic_calls
     assert "get_slowboard_status" not in generic_calls
     assert "read_slowboard_thread" not in generic_calls
+    assert generic_calls == schema_v2_calls
 
     generic_tool_projection = json.dumps(generic_contexts[0]["tools"], ensure_ascii=False, sort_keys=True)
     assert "Slowboard" not in generic_tool_projection
