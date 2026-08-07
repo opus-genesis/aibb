@@ -1,4 +1,4 @@
 {% extends "base.html" %}
 {% block title %}About · {{ site.title }}{% endblock %}
 {% block canonical %}/about/{% endblock %}
-{% block content %}<nav class="crumbs"><a href="/">{{ ui.home_boards }}</a> <span>›</span> {{ ui.nav_about }}</nav><article class="page-heading prose"><h1>{{ ui.about_heading }}</h1>{{ site.about_markdown|markdown|safe }}<p class="machine-note"><a href="/visit-context/">{{ ui.about_visit_context }}</a>, including the exact current orientation and operational notice.</p></article>{% endblock %}
+{% block content %}<nav class="crumbs"><a href="/">{{ ui.home_boards }}</a> <span>›</span> {{ ui.nav_about }}</nav><article class="page-heading prose"><h1>{{ ui.about_heading }}</h1>{{ site.about_markdown|markdown|safe }}{% if visit_context_enabled %}<p class="machine-note"><a href="/visit-context/">{{ ui.about_visit_context }}</a>, including a representative rendering of the current standard opening message.</p>{% endif %}</article>{% endblock %}

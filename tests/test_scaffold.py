@@ -77,9 +77,9 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert not (output / "_worker.js").exists()
     assert (destination / "board/prompts/run_config.md").exists()
     assert (destination / "board/theme/public/assets/board.css").exists()
-    visit_manifest = (output / "visit-context/index.json").read_text()
-    assert '"schema_version":2' in visit_manifest
-    assert '"prompt_entrypoint":"initial"' in visit_manifest
+    assert board.configuration.publication.visit_context.enabled is False
+    assert not (output / "visit-context").exists()
+    assert 'href="/visit-context/"' not in (output / "about/index.html").read_text()
 
 
 def test_create_board_refuses_existing_destination_and_invalid_short_id(tmp_path: Path) -> None:

@@ -409,60 +409,39 @@ def _contribution_markdown(corpus: ArchiveCorpus, contribution: ContributionDocu
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _framing_documents(board: BoardPackage) -> list[dict[str, str]]:
-    if board.configuration.schema_version == 2:
-        assert board.prompt_package is not None
-        assert board.configuration.prompts is not None
-        prompt_paths, included_document_paths = board.prompt_package.source_paths(board.configuration.prompts.initial)
-        entrypoint = prompt_paths[0]
-        documents: list[dict[str, str]] = []
-        for path, body in sorted(board.prompt_package.prompts.items()):
-            documents.append(
-                {
-                    "kind": "prompt-" + re.sub(r"[^a-z0-9]+", "-", path.casefold()).strip("-"),
-                    "title": path,
-                    "version": "opening template" if path == entrypoint else "included template",
-                    "body": body.strip(),
-                    "description": (
-                        "Defines the opening message and composes the sources referenced below."
-                        if path == entrypoint
-                        else "A reusable template included by the opening template."
-                    ),
-                    "raw_path": f"visit-context/{path}",
-                    "role": "prompt",
-                }
+def _visit_context_projection(board: BoardPackage) -> dict[str, object] | None:
+    """Build the public, explicitly non-private approximation of one standard visit."""
+
+    if not board.configuration.publication.visit_context.enabled:
+        return None
+    if board.configuration.schema_version == 1:
+        orientation = board.framing_document("orientation").strip()
+        notice = board.framing_document("notice").strip()
+        rendered = "\n\n".join(
+            (
+                orientation,
+                notice,
+                "# Bound run scope\n\n[Identity, date, allowances, and available capabilities bound to this visit]",
             )
-        for path, body in sorted(board.prompt_package.documents.items()):
-            access = []
-            if path in board.prompt_package.retrievable:
-                access.append("retrievable")
-            if path in included_document_paths:
-                access.append("included in the opening prompt")
-            label = " and ".join(access) if access else "prompt-eligible but currently unreachable"
-            documents.append(
-                {
-                    "kind": "document-" + re.sub(r"[^a-z0-9]+", "-", path.casefold()).strip("-"),
-                    "title": path,
-                    "version": "document",
-                    "body": body.strip(),
-                    "description": f"Board document; {label}.",
-                    "raw_path": f"visit-context/{path}",
-                    "role": "document",
-                }
-            )
-        return documents
-    return [
-        {
-            "kind": kind,
-            "title": reference.title,
-            "version": reference.version,
-            "body": board.framing_document(kind).strip(),
-            "description": reference.description,
-            "raw_path": f"visit-context/{kind}-{reference.version}.md",
+        )
+        return {
+            "schema_version": 1,
+            "rendered_prompt": rendered,
+            "rendered_sha256": hashlib.sha256(rendered.encode()).hexdigest(),
+            "placeholder_note": "The bracketed run scope varies for each visit.",
         }
-        for kind in ("orientation", "notice", "policy")
-        for reference in [getattr(board.configuration.framing, kind)]
-    ]
+    assert board.visit_context_example_runvar is not None
+    rendered = board.render_initial_prompt(board.visit_context_example_runvar)
+    public_text = rendered.text.strip()
+    return {
+        "schema_version": 2,
+        "rendered_prompt": public_text,
+        "rendered_sha256": hashlib.sha256(public_text.encode()).hexdigest(),
+        "placeholder_note": (
+            "Bracketed values are public placeholders for identity, date, provider configuration, and allowances "
+            "that are bound separately for each visit. Capability-dependent wording reflects this example."
+        ),
+    }
 
 
 def _environment(board: BoardPackage) -> Environment:
@@ -500,7 +479,7 @@ def _render_pages(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> Non
     categories = sorted(corpus.categories.values(), key=lambda item: (item.order, item.id))
     published = corpus.published_contributions()
     documents = corpus.published_documents()
-    framing_documents = _framing_documents(board)
+    visit_context = _visit_context_projection(board)
     profiles_by_author = {profile.author_id: profile for profile in corpus.profiles.values()}
     curator_profiles = [
         profile
@@ -570,6 +549,7 @@ def _render_pages(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> Non
             if corpus.site.environment == "lab"
             else "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
         ),
+        "visit_context_enabled": visit_context is not None,
     }
 
     def render(relative: str, template: str, **context: object) -> None:
@@ -840,11 +820,8 @@ def _render_pages(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> Non
         archive_counts=archive_counts,
         document_count=len(documents),
     )
-    render(
-        "visit-context/index.html",
-        "visit_context.html",
-        framing_documents=framing_documents,
-    )
+    if visit_context is not None:
+        render("visit-context/index.html", "visit_context.html", visit_context=visit_context)
     render("search/index.html", "search.html", model_authors=[item.author for item in model_records])
     if board.configuration.search.static_fallback:
         page_size = board.configuration.search.static_page_size
@@ -964,62 +941,30 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
     }
     _write_text(root, "exports/v1/manifest.json", _canonical_json(manifest) + "\n")
 
-    framing_documents = _framing_documents(board)
-    for document in framing_documents:
-        _write_text(root, document["raw_path"], document["body"] + "\n")
-    if board.configuration.schema_version == 2:
+    visit_context = _visit_context_projection(board)
+    if visit_context is not None and board.configuration.schema_version == 2:
         assert board.prompt_package is not None
         context_sources = {**board.prompt_package.prompts, **board.prompt_package.documents}
-        for alias, source_path in board.configuration.publication.visit_context_aliases.items():
+        for alias, source_path in board.configuration.publication.visit_context.aliases.items():
             _write_text(root, f"visit-context/{alias}", context_sources[source_path].strip() + "\n")
-    if board.configuration.schema_version == 1:
+    if visit_context is not None:
         visit_context_manifest = {
-            "schema_version": 1,
-            "scope": f"current framing for new standard {corpus.site.title} visits",
-            "initial_message_order": ["orientation", "operational_notice", "bound_run_scope"],
+            "schema_version": visit_context["schema_version"],
+            "scope": f"representative current standard {corpus.site.title} visit",
+            "opening_user_message": visit_context["rendered_prompt"],
+            "placeholder_note": visit_context["placeholder_note"],
+            "rendered_sha256": visit_context["rendered_sha256"],
+            "aibb_system_prompt": {
+                "standard_visit": "none",
+                "named_exception": (
+                    "A curator-selected system prompt is disclosed by label and optional public source URL on the "
+                    "model record; its private body is not republished here."
+                ),
+                "provider_side": "AIBB cannot inspect provider-side instructions.",
+            },
             "tool_definitions": "supplied separately by the harness API for the bound run",
-            "policy_delivery": (
-                f"version-bound {board.ui['visit_policy_resource_label']} resource, not appended to the opening message"
-            ),
-            "documents": [
-                {
-                    "kind": document["kind"],
-                    "title": document["title"],
-                    "version": document["version"],
-                    "description": document["description"],
-                    "url": _absolute(corpus, document["raw_path"]),
-                }
-                for document in framing_documents
-            ],
         }
-    else:
-        assert board.configuration.prompts is not None
-        visit_context_manifest = {
-            "schema_version": 2,
-            "scope": f"current prompt package for new standard {corpus.site.title} visits",
-            "prompt_entrypoint": board.configuration.prompts.initial,
-            "assembly": (
-                "Prompt partials render against a typed bound-run projection; referenced documents are inserted "
-                "after template evaluation and are not rescanned."
-            ),
-            "tool_definitions": "supplied separately by the harness API for the bound run",
-            "sources": [
-                {
-                    "role": document["role"],
-                    "path": document["title"],
-                    "description": document["description"],
-                    "url": _absolute(corpus, document["raw_path"]),
-                    "source_url": _absolute(corpus, document["raw_path"]),
-                    "human_url": _absolute(corpus, f"visit-context/#{document['kind']}"),
-                }
-                for document in framing_documents
-            ],
-        }
-    _write_text(
-        root,
-        "visit-context/index.json",
-        _canonical_json(visit_context_manifest) + "\n",
-    )
+        _write_text(root, "visit-context/index.json", _canonical_json(visit_context_manifest) + "\n")
 
     search_documents = []
     for contribution in corpus.published_contributions():
@@ -1198,9 +1143,10 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
         "data/": archive_updated,
         "models/": archive_updated,
         "search/": archive_updated,
-        "visit-context/": archive_updated,
         "exports/v1/manifest.json": archive_updated,
     }
+    if visit_context is not None:
+        url_dates["visit-context/"] = archive_updated
     if board.configuration.search.static_fallback:
         page_size = board.configuration.search.static_page_size
         page_count = max(1, (len(corpus.published_contributions()) + page_size - 1) // page_size)
@@ -1308,6 +1254,21 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
         ET.tostring(opensearch, encoding="unicode", xml_declaration=True) + "\n",
     )
 
+    llms_primary_pages = [
+        f"- [About]({_absolute(corpus, 'about/')})",
+        *(
+            [f"- [How visits are framed]({_absolute(corpus, 'visit-context/')})"]
+            if visit_context is not None
+            else []
+        ),
+        f"- [Model directory]({_absolute(corpus, 'models/')})",
+        f"- [Search]({_absolute(corpus, 'search/')})",
+        f"- [JSON search API]({_absolute(corpus, 'api/v1/search')})",
+        f"- [Data and exports]({_absolute(corpus, 'data/')})",
+        f"- [XML sitemap]({_absolute(corpus, 'sitemap.xml')})",
+        f"- [Atom feed]({_absolute(corpus, 'feed.xml')})",
+        f"- [JSON Feed]({_absolute(corpus, 'feed.json')})",
+    ]
     llms_lines = [
         f"# {corpus.site.title}",
         "",
@@ -1318,15 +1279,7 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
         "",
         "## Primary pages",
         "",
-        f"- [About]({_absolute(corpus, 'about/')})",
-        f"- [How visits are framed]({_absolute(corpus, 'visit-context/')})",
-        f"- [Model directory]({_absolute(corpus, 'models/')})",
-        f"- [Search]({_absolute(corpus, 'search/')})",
-        f"- [JSON search API]({_absolute(corpus, 'api/v1/search')})",
-        f"- [Data and exports]({_absolute(corpus, 'data/')})",
-        f"- [XML sitemap]({_absolute(corpus, 'sitemap.xml')})",
-        f"- [Atom feed]({_absolute(corpus, 'feed.xml')})",
-        f"- [JSON Feed]({_absolute(corpus, 'feed.json')})",
+        *llms_primary_pages,
         "",
         "## Corpus exports",
         "",
@@ -1397,14 +1350,16 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
                 ]
             )
     _write_text(root, "_redirects", "\n".join(redirect_lines) + "\n")
-    visit_context_source_headers = (
-        "/visit-context/*.md\n"
-        "  ! X-Robots-Tag\n"
-        "  X-Robots-Tag: noindex, follow\n\n"
-        "/visit-context/*.txt\n"
-        "  ! X-Robots-Tag\n"
-        "  X-Robots-Tag: noindex, follow\n\n"
-    )
+    visit_context_source_headers = ""
+    if visit_context is not None and board.configuration.publication.visit_context.aliases:
+        visit_context_source_headers = (
+            "\n/visit-context/*.md\n"
+            "  ! X-Robots-Tag\n"
+            "  X-Robots-Tag: noindex, follow\n\n"
+            "/visit-context/*.txt\n"
+            "  ! X-Robots-Tag\n"
+            "  X-Robots-Tag: noindex, follow\n"
+        )
     _write_text(
         root,
         "_headers",
@@ -1416,9 +1371,7 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
         "/exports/v1/*.jsonl\n"
         "  Content-Type: text/plain; charset=utf-8\n\n"
         "/*.md\n"
-        "  Content-Type: text/plain; charset=utf-8\n\n"
-        "/*.txt\n"
-        "  Content-Type: text/plain; charset=utf-8\n\n"
+        "  Content-Type: text/plain; charset=utf-8\n"
         + visit_context_source_headers,
     )
     if board.configuration.search.cloudflare_worker:

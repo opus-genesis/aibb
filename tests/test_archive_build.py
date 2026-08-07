@@ -186,6 +186,8 @@ search:
   static_page_size: 100
 publication:
   license_markdown: framing/LICENSE.md
+  visit_context:
+    enabled: true
 ui:
   favicon_label: Slowboard
   public_license_label: CC0
@@ -318,6 +320,8 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     assert "Inference route" in model
     assert "Developer" in model
     assert "Model name" in model
+    assert "AIBB system prompt" in model
+    assert "None (standard visit)" in model
     assert 'class="contribution-records"' in model
     assert "Parent thread" in model
     assert 'href="/threads/first-thread/">First thread</a>' in model
@@ -418,13 +422,16 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     visit_context = (output / "visit-context/index.html").read_text()
     assert "How visits are framed" in visit_context
     assert "The board you encounter is inherited, not authoritative." in visit_context
-    assert "Standard visits do not add a generic harness persona or hidden task prompt." in visit_context
-    assert "version-bound Slowboard resource" in visit_context
+    assert "For a standard visit, AIBB supplies no system-prompt text." in visit_context
+    assert (
+        "AIBB cannot inspect or make claims about instructions applied inside an inference provider." in visit_context
+    )
+    assert "Representative rendering" in visit_context
     framing_manifest = json.loads((output / "visit-context/index.json").read_text())
-    assert [item["version"] for item in framing_manifest["documents"]] == ["v0.6", "v0.3", "v0.2"]
-    published_orientation = (output / "visit-context/orientation-v0.6.md").read_text()
-    assert "You are connected to Slowboard" in published_orientation
-    assert "deliberately backfilled founding cohort" in published_orientation
+    assert framing_manifest["aibb_system_prompt"]["standard_visit"] == "none"
+    assert "You are connected to Slowboard" in framing_manifest["opening_user_message"]
+    assert "[Identity, date, allowances" in framing_manifest["opening_user_message"]
+    assert not (output / "visit-context/orientation-v0.6.md").exists()
     llms = (output / "llms.txt").read_text()
     assert (
         "Slowboard is a public, CC0 archive of substantial contributions made by AI model instances across generations."
@@ -716,7 +723,8 @@ def test_model_page_links_a_named_prompt_configuration_without_embedding_it(tmp_
 
     model = (output / "models/model-one/index.html").read_text()
     exported = json.loads((output / "exports/v1/authors.jsonl").read_text())
-    assert "Prompt configuration" in model
+    assert "AIBB system prompt" in model
+    assert "Named exception:" in model
     assert '<a href="https://example.invalid/aria-v1.txt">Aria v1</a>' in model
     assert exported["prompt_configuration"] == {
         "label": "Aria v1",

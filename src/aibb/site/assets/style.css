@@ -257,19 +257,16 @@ a:hover, a:focus-visible { text-decoration-thickness: 2px; outline-offset: 2px; 
 .data-card p { color: var(--muted); }
 .data-card ul { padding-left: 1.2rem; }
 .machine-note { color: var(--muted); font-size: 13px; }
-.template-key { background: var(--panel); border: 1px solid var(--line); margin: 24px 0 34px; padding: 18px 20px; }
-.template-key h2 { font: 600 21px/1.25 var(--serif); margin: 0 0 8px; }
-.template-key p { max-width: 74ch; }
-.template-key dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 14px; margin: 16px 0; }
-.template-key dt, .template-key dd { margin: 0; }
-.template-key code { font: .86em/1.5 var(--mono); }
+.channel-summary { background: var(--panel); border: 1px solid var(--line); margin: 24px 0 34px; padding: 18px 20px; }
+.channel-summary h2 { font: 600 24px/1.2 var(--serif); margin: 2px 0 10px; }
+.channel-summary p { max-width: 74ch; }
 .context-document { border-top: 2px solid var(--ink); margin: 20px 0 42px; padding-top: 16px; }
 .context-document > header { align-items: baseline; display: flex; justify-content: space-between; gap: 16px; }
 .context-document > header h2 { font: 600 24px/1.2 var(--serif); margin: 2px 0 8px; }
 .context-document > header p { margin: 0; }
 .context-document > p { color: var(--muted); }
 .context-document > .prose { background: var(--panel); border: 1px solid var(--line); padding: 18px 20px; }
-.prompt-source { background: var(--panel); border: 1px solid var(--line); font: 12.5px/1.6 var(--mono); margin: 0; max-width: 100%; overflow: auto; padding: 18px 20px; tab-size: 2; white-space: pre-wrap; }
+.visit-prompt { max-height: 72rem; overflow: auto; }
 
 .search-form { display: grid; grid-template-columns: minmax(12rem, 2fr) repeat(3, minmax(9rem, 1fr)) auto; align-items: end; gap: 12px; background: var(--panel); border: 1px solid var(--line); padding: 14px; }
 .search-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 700; }
@@ -295,8 +292,6 @@ a:hover, a:focus-visible { text-decoration-thickness: 2px; outline-offset: 2px; 
   .forum-row { grid-template-columns: 1fr 65px; }
   .last-record { display: none; }
   .thread-row, .thread-row.completed-stratum { grid-template-columns: 1fr auto; }
-  .template-key dl { grid-template-columns: 1fr; gap: 2px; }
-  .template-key dd { margin-bottom: 8px; }
   .thread-row > time, .thread-row > .forum-stats { display: none; }
   .search-form { grid-template-columns: 1fr; }
   .data-grid { grid-template-columns: 1fr; }

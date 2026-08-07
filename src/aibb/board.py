@@ -11,7 +11,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from aibb.prompting import PromptPackage, PromptWarning, RenderedPrompt
+from aibb.prompting import PromptPackage, PromptPackageError, PromptWarning, RenderedPrompt
 
 BOARD_CONFIG_NAME = "aibb-board.yaml"
 BOARD_CONFIG_PATH = Path("board") / BOARD_CONFIG_NAME
@@ -153,15 +153,18 @@ class SearchConfiguration(BaseModel):
     static_page_size: int = Field(default=100, ge=10, le=500)
 
 
-class PublicationConfiguration(BaseModel):
+class VisitContextPublicationConfiguration(BaseModel):
+    """Optional reader-facing projection of a board's standard visit prompt."""
+
     model_config = ConfigDict(extra="forbid")
 
-    license_markdown: str | None = Field(default=None, min_length=1, max_length=500)
-    visit_context_aliases: dict[str, str] = Field(default_factory=dict, max_length=100)
+    enabled: bool = False
+    example_runvar: str | None = Field(default=None, min_length=1, max_length=500)
+    aliases: dict[str, str] = Field(default_factory=dict, max_length=100)
 
-    @field_validator("visit_context_aliases")
+    @field_validator("aliases")
     @classmethod
-    def validate_visit_context_aliases(cls, values: dict[str, str]) -> dict[str, str]:
+    def validate_aliases(cls, values: dict[str, str]) -> dict[str, str]:
         for output, source in values.items():
             output_path = PurePosixPath(output)
             source_path = PurePosixPath(source)
@@ -179,6 +182,15 @@ class PublicationConfiguration(BaseModel):
             ):
                 raise ValueError(f"invalid visit-context alias source: {source!r}")
         return values
+
+
+class PublicationConfiguration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    license_markdown: str | None = Field(default=None, min_length=1, max_length=500)
+    visit_context: VisitContextPublicationConfiguration = Field(
+        default_factory=VisitContextPublicationConfiguration
+    )
 
 
 class InterfaceConfiguration(BaseModel):
@@ -227,13 +239,22 @@ class BoardConfiguration(BaseModel):
                 raise ValueError("schema_version 1 does not support documents or prompts")
             if self.tools != ToolsConfiguration():
                 raise ValueError("schema_version 1 does not support declarative tool policy")
-            if self.publication.visit_context_aliases:
+            if self.publication.visit_context.aliases:
                 raise ValueError("schema_version 1 does not support prompt-package visit-context aliases")
+            if self.publication.visit_context.example_runvar is not None:
+                raise ValueError("schema_version 1 does not support a prompt-package visit-context example")
         else:
             if self.framing is not None:
                 raise ValueError("schema_version 2 replaces framing with documents and prompts")
             if self.documents is None or self.prompts is None:
                 raise ValueError("schema_version 2 requires documents and prompts")
+            visit_context = self.publication.visit_context
+            if visit_context.enabled != (visit_context.example_runvar is not None):
+                raise ValueError(
+                    "schema_version 2 visit-context publication requires enabled and example_runvar together"
+                )
+            if visit_context.aliases and not visit_context.enabled:
+                raise ValueError("visit-context aliases require visit-context publication")
         return self
 
     @field_validator("ui")
@@ -258,6 +279,7 @@ class BoardSnapshot(BaseModel):
     configuration: BoardConfiguration
     framing_documents: dict[Literal["orientation", "notice", "policy"], str] = Field(default_factory=dict)
     publication_license_markdown: str | None = None
+    visit_context_example_runvar: dict[str, object] | None = None
     digest: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
@@ -302,6 +324,7 @@ class BoardPackage:
     framing_documents: dict[str, str]
     prompt_package: PromptPackage | None = None
     publication_license_markdown: str | None = None
+    visit_context_example_runvar: dict[str, object] | None = None
     templates_dir: Path | None = None
     assets_dir: Path | None = None
     source: Path | None = None
@@ -317,6 +340,7 @@ class BoardPackage:
             self.framing_documents,
             self.prompt_package,
             self.publication_license_markdown,
+            self.visit_context_example_runvar,
         )
 
     @property
@@ -348,6 +372,7 @@ class BoardPackage:
             configuration=self.configuration,
             framing_documents=self.framing_documents,
             publication_license_markdown=self.publication_license_markdown,
+            visit_context_example_runvar=self.visit_context_example_runvar,
             digest=self.digest,
         )
         path = run_dir / BOARD_SNAPSHOT_PATH
@@ -374,6 +399,7 @@ def _snapshot_digest(
     framing_documents: dict[str, str],
     prompt_package: PromptPackage | None = None,
     publication_license_markdown: str | None = None,
+    visit_context_example_runvar: dict[str, object] | None = None,
 ) -> str:
     if configuration.schema_version == 1:
         payload = {
@@ -389,6 +415,7 @@ def _snapshot_digest(
         "documents": prompt_package.documents if prompt_package else {},
         "retrievable_documents": sorted(prompt_package.retrievable) if prompt_package else [],
         "publication_license_markdown": publication_license_markdown,
+        "visit_context_example_runvar": visit_context_example_runvar,
     }
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
@@ -418,6 +445,19 @@ def _load_configuration(path: Path) -> BoardConfiguration:
         raise BoardConfigurationError(f"Invalid board configuration {path}: {error}") from error
 
 
+def _load_json_object(path: Path, *, kind: str) -> dict[str, object]:
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"non-finite JSON value {value}")
+
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"), parse_constant=reject_constant)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+        raise BoardConfigurationError(f"Invalid board {kind} file {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise BoardConfigurationError(f"Board {kind} must contain a JSON object: {path}")
+    return value
+
+
 def _package_from_configuration(configuration: BoardConfiguration, *, root: Path, source: Path | None) -> BoardPackage:
     framing_documents: dict[str, str] = {}
     prompt_package = None
@@ -439,7 +479,7 @@ def _package_from_configuration(configuration: BoardConfiguration, *, root: Path
         )
         prompt_package.warnings([configuration.prompts.initial])
         sources = prompt_package.prompts.keys() | prompt_package.documents.keys()
-        for output, source_path in configuration.publication.visit_context_aliases.items():
+        for output, source_path in configuration.publication.visit_context.aliases.items():
             if source_path not in sources:
                 raise BoardConfigurationError(
                     f"Visit-context alias {output!r} names an unknown prompt/document source: {source_path}"
@@ -457,12 +497,31 @@ def _package_from_configuration(configuration: BoardConfiguration, *, root: Path
         if publication_license_path is not None
         else None
     )
+    visit_context_example_path = _resolve_package_path(
+        root,
+        configuration.publication.visit_context.example_runvar,
+        kind="visit-context example run variables",
+        directory=False,
+    )
+    visit_context_example_runvar = (
+        _load_json_object(visit_context_example_path, kind="visit-context example run variables")
+        if visit_context_example_path is not None
+        else None
+    )
+    if visit_context_example_runvar is not None:
+        if prompt_package is None or configuration.prompts is None:
+            raise BoardConfigurationError("Visit-context examples require a prompt-package board")
+        try:
+            prompt_package.render(configuration.prompts.initial, runvar=visit_context_example_runvar)
+        except PromptPackageError as error:
+            raise BoardConfigurationError(f"Visit-context example cannot render the opening prompt: {error}") from error
     return BoardPackage(
         configuration=configuration,
         root=root,
         framing_documents=framing_documents,
         prompt_package=prompt_package,
         publication_license_markdown=publication_license_markdown,
+        visit_context_example_runvar=visit_context_example_runvar,
         templates_dir=_resolve_package_path(root, configuration.theme.templates, kind="templates", directory=True),
         assets_dir=_resolve_package_path(root, configuration.theme.assets, kind="assets", directory=True),
         source=source,
@@ -508,6 +567,7 @@ def load_run_board_package(run_dir: Path, data_repo: Path) -> BoardPackage:
         snapshot.framing_documents,
         prompt_package,
         snapshot.publication_license_markdown,
+        snapshot.visit_context_example_runvar,
     )
     if snapshot.digest != expected:
         raise BoardConfigurationError("Run board snapshot digest does not match its content")
@@ -517,5 +577,6 @@ def load_run_board_package(run_dir: Path, data_repo: Path) -> BoardPackage:
         framing_documents=dict(snapshot.framing_documents),
         prompt_package=prompt_package,
         publication_license_markdown=snapshot.publication_license_markdown,
+        visit_context_example_runvar=snapshot.visit_context_example_runvar,
         source=path,
     )

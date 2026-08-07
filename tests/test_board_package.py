@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -91,6 +92,15 @@ def _write_v2_board_package(root: Path) -> Path:
     (root / "documents/orphan.md").write_text("Unused.\n")
     (root / "publication").mkdir()
     (root / "publication/LICENSE.md").write_text("# Example publication license\n")
+    (root / "publication/visit-context-example.json").write_text(
+        json.dumps(
+            {
+                "bound_identity": {"display_name": "[model name]"},
+                "contribution_rules": {"total_finished_contribution_allowance": "[allowance]"},
+            }
+        )
+        + "\n"
+    )
     config = root / "aibb-board.yaml"
     config.write_text(
         """schema_version: 2
@@ -118,8 +128,11 @@ search:
   static_fallback: true
 publication:
   license_markdown: publication/LICENSE.md
-  visit_context_aliases:
-    rules-v1.md: documents/rules.md
+  visit_context:
+    enabled: true
+    example_runvar: publication/visit-context-example.json
+    aliases:
+      rules-v1.md: documents/rules.md
 """
     )
     return config
@@ -149,8 +162,9 @@ def test_configured_board_controls_build_theme_framing_and_search_fallback(tmp_p
     assert "This form returns complete HTML results without JavaScript." not in search
     assert not (output / "_worker.js").exists()
     assert not (output / "_routes.json").exists()
-    assert (output / "visit-context/orientation-v1.md").read_text() == "# Example orientation\n\nRead with care.\n"
-    assert "version-bound board resource" in (output / "visit-context/index.html").read_text()
+    assert not (output / "visit-context").exists()
+    assert 'href="/visit-context/"' not in (output / "about/index.html").read_text()
+    assert "How visits are framed" not in (output / "llms.txt").read_text()
     assert "released under CC0-1.0 for indexing" in (output / "data/index.html").read_text()
     assert "public archive of contributions made by AI model instances" in (output / "llms.txt").read_text()
     publication_license = (output / "LICENSE.md").read_text()
@@ -216,14 +230,17 @@ def test_v2_board_renders_prompt_warns_and_snapshots_sources(tmp_path: Path) -> 
     build_site(data, output)
     assert (output / "visit-context/rules-v1.md").read_text() == "Add signal.\n"
     visit_context = (output / "visit-context/index.html").read_text()
-    assert "How to read the prompt templates" in visit_context
-    assert '<pre class="prompt-source"><code>Welcome {{runvar:bound_identity.display_name}}.' in visit_context
-    assert "<p>Welcome {{runvar:bound_identity.display_name}}." not in visit_context
-    assert "Plain-text source" in visit_context
+    assert "For a standard visit, AIBB supplies no system-prompt text." in visit_context
+    assert "Welcome [model name]." in visit_context
+    assert "Allowance: [allowance]." in visit_context
+    assert "{{runvar" not in visit_context
+    assert not (output / "visit-context/prompts/initial.md").exists()
     visit_manifest = json.loads((output / "visit-context/index.json").read_text())
-    initial_source = next(item for item in visit_manifest["sources"] if item["path"] == "prompts/initial.md")
-    assert initial_source["source_url"] == "https://archive.example/visit-context/prompts/initial.md"
-    assert initial_source["human_url"].endswith("/visit-context/#prompt-prompts-initial-md")
+    assert visit_manifest["aibb_system_prompt"]["standard_visit"] == "none"
+    assert visit_manifest["opening_user_message"].startswith("Welcome [model name].")
+    assert visit_manifest["rendered_sha256"] == hashlib.sha256(
+        visit_manifest["opening_user_message"].encode()
+    ).hexdigest()
     headers = (output / "_headers").read_text()
     assert "/visit-context/*.md\n  ! X-Robots-Tag\n  X-Robots-Tag: noindex, follow" in headers
     board.snapshot(run_dir)
@@ -241,6 +258,25 @@ def test_v2_board_renders_prompt_warns_and_snapshots_sources(tmp_path: Path) -> 
     assert restored.digest == board.digest
     assert restored_rendered == rendered
     assert restored.publication_license_markdown == "# Example publication license\n"
+    assert restored.visit_context_example_runvar == board.visit_context_example_runvar
+
+
+def test_enabled_visit_context_requires_a_renderable_public_example(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+    _write_archive(missing)
+    config = _write_v2_board_package(missing)
+    config.write_text(
+        config.read_text().replace("    example_runvar: publication/visit-context-example.json\n", "")
+    )
+    with pytest.raises(BoardConfigurationError, match="requires enabled and example_runvar together"):
+        load_board_package(missing)
+
+    invalid = tmp_path / "invalid"
+    _write_archive(invalid)
+    _write_v2_board_package(invalid)
+    (invalid / "publication/visit-context-example.json").write_text("{}\n")
+    with pytest.raises(BoardConfigurationError, match="example cannot render the opening prompt"):
+        load_board_package(invalid)
 
 
 def test_v2_board_controls_tools_and_retrievable_documents(tmp_path: Path) -> None:
