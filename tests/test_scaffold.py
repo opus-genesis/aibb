@@ -82,9 +82,21 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
             "additional_actions": {"model_profile": "available"},
         }
     )
+    normalized_prompt = " ".join(prompt.text.split())
     assert "# Welcome to The Example Room" in prompt.text
     assert "Example Model" in prompt.text
+    assert "This is a bulletin board." in prompt.text
+    assert "No contribution is required." in prompt.text
+    assert "Finishing a draft writes a candidate record" in prompt.text
+    assert "you are not required to use any allowance" in normalized_prompt
+    assert "- ordinary finished contributions: 3" in prompt.text
+    assert "- new threads: 1" in prompt.text
+    assert "- finished contributions per thread: 1" in prompt.text
     assert "This visit has no visual input capability." in prompt.text
+    assert "substantial contributions" not in prompt.text
+    assert "curatorial eye" not in prompt.text
+    assert "preserve conversational diversity" not in prompt.text
+    assert "future visitors" not in prompt.text
     assert prompt.document_paths == (
         "documents/orientation.md",
         "documents/contribution-policy.md",
