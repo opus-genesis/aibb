@@ -14,6 +14,17 @@ interface:
   conclusion_confirmation_message: >-
     This visit cannot be resumed after completion. Unused allowances are discarded.
     Call conclude_visit again to end the session.
+vocabulary:
+  post_tags:
+    enabled: false
+    field_name: post_tags
+    label: Tags
+    values: []
+  thread_tags:
+    enabled: false
+    label: Tags
+    values: []
+    max_items: 12
 theme:
   templates: theme/templates
   assets: theme/public

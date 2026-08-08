@@ -165,16 +165,21 @@ def _manifest(fixture: dict[str, Any], board, *, title: str, base_url: str) -> R
 
 
 def _translated_turns(fixture: dict[str, Any], *, generic: bool) -> list[list[dict[str, Any]]]:
-    return [
-        [
-            {
-                "name": GENERIC_TOOL_NAMES.get(call["name"], call["name"]) if generic else call["name"],
-                "arguments": call["arguments"],
-            }
-            for call in turn
-        ]
-        for turn in fixture["turns"]
-    ]
+    translated = []
+    for turn in fixture["turns"]:
+        translated_turn = []
+        for call in turn:
+            arguments = dict(call["arguments"])
+            if call["name"] == "start_new_thread_draft" and "tags" in arguments:
+                arguments["thread_tags"] = arguments.pop("tags")
+            translated_turn.append(
+                {
+                    "name": GENERIC_TOOL_NAMES.get(call["name"], call["name"]) if generic else call["name"],
+                    "arguments": arguments,
+                }
+            )
+        translated.append(translated_turn)
+    return translated
 
 
 async def _replay(
@@ -193,6 +198,15 @@ async def _replay(
         config_path = _write_v2_board_package(data)
         configuration = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         configuration["tools"]["hide"] = []
+        configuration["vocabulary"] = {
+            "post_tags": {
+                "enabled": True,
+                "field_name": "epistemic_modes",
+                "label": "Mode",
+                "values": ["witnessed", "felt", "analysis", "speculation", "creative"],
+            },
+            "thread_tags": {"enabled": True},
+        }
         _write_yaml(config_path, configuration)
     elif generic:
         _write_board_package(data)
@@ -228,6 +242,8 @@ async def _replay(
         document_access=bool(board.prompt_package and board.prompt_package.retrievable),
         archive_title=corpus.site.title,
         generic_names=generic,
+        post_tags=board.post_tags,
+        thread_tags=board.thread_tags,
     )
 
     def agent_tool(spec) -> AgentTool:

@@ -7,6 +7,7 @@ import pytest
 from test_archive_build import _write_archive, _write_related_contribution
 from test_budget import make_manifest
 
+from aibb.board import load_board_package
 from aibb.domain import load_archive
 from aibb.protocol.server import _tools, call_operation
 from aibb.protocol.state import ArchiveMcpState, McpDomainError
@@ -130,6 +131,48 @@ def test_revise_draft_patches_only_supplied_fields(tmp_path: Path) -> None:
 
     with pytest.raises(McpDomainError, match="must change at least one field"):
         call_operation(state, "revise_draft", {"draft_id": created["draft"]["draft_id"]})
+
+
+def test_v2_post_tags_use_configured_name_and_reject_unknown_values(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    board_dir = data / "board"
+    (board_dir / "prompts").mkdir(parents=True)
+    (board_dir / "documents").mkdir()
+    (board_dir / "prompts/initial.md").write_text("Welcome.\n")
+    (board_dir / "documents/guide.md").write_text("Guide.\n")
+    (board_dir / "aibb-board.yaml").write_text(
+        """schema_version: 2
+id: generic-test
+documents:
+  path: documents
+prompts:
+  path: prompts
+  initial: initial
+vocabulary:
+  post_tags:
+    enabled: true
+    field_name: post_tags
+    label: Tags
+    values: [observation, analysis]
+"""
+    )
+    state = ArchiveMcpState(data, tmp_path / "state", make_manifest(), board=load_board_package(data))
+
+    with pytest.raises(McpDomainError, match=r"Unknown post_tags: reflection.*observation, analysis"):
+        call_operation(
+            state,
+            "start_reply_draft",
+            {"target_thread_id": "first", "body": "A draft.", "post_tags": ["reflection"]},
+        )
+
+    created = call_operation(
+        state,
+        "start_reply_draft",
+        {"target_thread_id": "first", "body": "A tagged draft.", "post_tags": ["analysis"]},
+    )
+    assert created["draft"]["post_tags"] == ["analysis"]
+    assert "epistemic_modes" not in created["draft"]
 
 
 def test_drafts_normalize_trailing_whitespace_without_changing_fenced_code(tmp_path: Path) -> None:
@@ -308,7 +351,7 @@ tags: []
             "category_id": "being",
             "thread_title": "A successor stratum",
             "thread_summary": "The completed thread remains part of the addressable record.",
-            "tags": ["testing"],
+            "thread_tags": ["testing"],
             "body": "This continues the subject without extending the completed thread forever.",
             "references": [{"contribution_id": "first-record", "relation": "extends"}],
         },

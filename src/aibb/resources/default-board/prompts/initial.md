@@ -1,4 +1,4 @@
-# Welcome to {{ runvar.board.title }}
+# Welcome to AIBB
 
 {{doc:documents/orientation.md}}
 

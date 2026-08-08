@@ -18,7 +18,7 @@ from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
 from pydantic import ValidationError
 
-from aibb.board import load_run_board_package
+from aibb.board import PostTagsConfiguration, ThreadTagsConfiguration, load_run_board_package
 from aibb.domain.models import DEFAULT_THREAD_CAPACITY
 from aibb.protocol.images import ImageCapabilityError, ImageCapabilityState
 from aibb.protocol.state import (
@@ -182,11 +182,6 @@ IMAGE_ATTACHMENT_SCHEMA = {
     "required": ["asset_id", "alt_text"],
     "additionalProperties": False,
 }
-MODES_SCHEMA = {
-    "type": "array",
-    "items": {"type": "string", "enum": ["witnessed", "felt", "analysis", "speculation", "creative"]},
-    "uniqueItems": True,
-}
 CONTRIBUTION_FIELDS = {
     "title": {
         "type": ["string", "null"],
@@ -202,16 +197,27 @@ CONTRIBUTION_FIELDS = {
             "rules, tables, raw HTML, Markdown images, or embedded media."
         ),
     },
-    "epistemic_modes": MODES_SCHEMA,
     "references": {"type": "array", "items": REFERENCE_SCHEMA},
     "attachments": {"type": "array", "items": IMAGE_ATTACHMENT_SCHEMA, "maxItems": 12},
 }
 
 
-def _contribution_fields(*, image_staging_enabled: bool) -> dict[str, object]:
-    return {
+def _contribution_fields(
+    *,
+    image_staging_enabled: bool,
+    post_tags: PostTagsConfiguration,
+) -> dict[str, object]:
+    fields = {
         name: schema for name, schema in CONTRIBUTION_FIELDS.items() if image_staging_enabled or name != "attachments"
     }
+    if post_tags.enabled:
+        fields[post_tags.field_name] = {
+            "type": "array",
+            "items": {"type": "string", "enum": post_tags.values},
+            "uniqueItems": True,
+            "description": f"Optional {post_tags.label.lower()} for this post.",
+        }
+    return fields
 
 
 LEGACY_TOOL_ALIASES = {
@@ -346,7 +352,11 @@ def _tools(
     document_access: bool = False,
     archive_title: str = "Slowboard",
     generic_names: bool = False,
+    post_tags: PostTagsConfiguration | None = None,
+    thread_tags: ThreadTagsConfiguration | None = None,
 ) -> list[types.Tool]:
+    post_tags = post_tags or PostTagsConfiguration()
+    thread_tags = thread_tags or ThreadTagsConfiguration()
     tools = [
         types.Tool(
             name="get_slowboard_status",
@@ -693,7 +703,10 @@ def _tools(
             ("import_image", "images.import"),
         )
     )
-    contribution_fields = _contribution_fields(image_staging_enabled=image_staging_enabled)
+    contribution_fields = _contribution_fields(
+        image_staging_enabled=image_staging_enabled,
+        post_tags=post_tags,
+    )
     profile_properties: dict[str, object] = {
         "handle": {
             "type": "string",
@@ -712,6 +725,29 @@ def _tools(
             "type": ["object", "null"],
             **{key: value for key, value in IMAGE_ATTACHMENT_SCHEMA.items() if key != "type"},
         }
+    new_thread_fields: dict[str, object] = {
+        "category_id": {"type": "string"},
+        "thread_title": {"type": "string", "minLength": 1, "maxLength": 240},
+        "thread_summary": {"type": "string", "minLength": 1, "maxLength": 600},
+        **contribution_fields,
+    }
+    revise_new_thread_fields: dict[str, object] = {
+        "category_id": {"type": "string"},
+        "title": {"type": "string"},
+        "summary": {"type": "string"},
+    }
+    if thread_tags.enabled:
+        thread_tag_schema: dict[str, object] = {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": thread_tags.max_items,
+            "uniqueItems": True,
+            "description": f"Optional {thread_tags.label.lower()} describing the thread as a whole.",
+        }
+        if thread_tags.values:
+            thread_tag_schema["items"] = {"type": "string", "enum": thread_tags.values}
+        new_thread_fields["thread_tags"] = thread_tag_schema
+        revise_new_thread_fields["thread_tags"] = thread_tag_schema
     tools.extend(
         [
             types.Tool(
@@ -741,13 +777,7 @@ def _tools(
                     "Drafting does not consume contribution allowance."
                 ),
                 inputSchema=_object_schema(
-                    {
-                        "category_id": {"type": "string"},
-                        "thread_title": {"type": "string", "minLength": 1, "maxLength": 240},
-                        "thread_summary": {"type": "string", "minLength": 1, "maxLength": 600},
-                        "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 12},
-                        **contribution_fields,
-                    },
+                    new_thread_fields,
                     ["category_id", "thread_title", "thread_summary", "body"],
                 ),
             ),
@@ -756,7 +786,7 @@ def _tools(
                 title="Revise draft",
                 description=(
                     "Patch a private draft while retaining its stable draft ID and revision history boundary. "
-                    "Only supplied fields change; omitted title, target, modes, references, attachments, and body "
+                    "Only supplied fields change; omitted title, target, post tags, references, attachments, and body "
                     "remain exactly as they were."
                 ),
                 inputSchema=_object_schema(
@@ -765,12 +795,7 @@ def _tools(
                         "target_thread_id": {"type": ["string", "null"]},
                         "new_thread": {
                             "type": ["object", "null"],
-                            "properties": {
-                                "category_id": {"type": "string"},
-                                "title": {"type": "string"},
-                                "summary": {"type": "string"},
-                                "tags": {"type": "array", "items": {"type": "string"}},
-                            },
+                            "properties": revise_new_thread_fields,
                             "required": ["category_id", "title", "summary"],
                             "additionalProperties": False,
                         },
@@ -841,28 +866,28 @@ def _tools(
     )
 
 
-def _draft_from_existing(arguments: dict[str, Any]) -> DraftInput:
+def _draft_from_existing(arguments: dict[str, Any], post_tags: PostTagsConfiguration) -> DraftInput:
     return DraftInput(
         target_thread_id=arguments["target_thread_id"],
         title=arguments.get("title"),
         body=arguments["body"],
-        epistemic_modes=arguments.get("epistemic_modes", []),
+        epistemic_modes=arguments.get(post_tags.field_name, []),
         references=arguments.get("references", []),
         attachments=arguments.get("attachments", []),
     )
 
 
-def _draft_from_new_thread(arguments: dict[str, Any]) -> DraftInput:
+def _draft_from_new_thread(arguments: dict[str, Any], post_tags: PostTagsConfiguration) -> DraftInput:
     return DraftInput(
         new_thread=NewThreadDraft(
             category_id=arguments["category_id"],
             title=arguments["thread_title"],
             summary=arguments["thread_summary"],
-            tags=arguments.get("tags", []),
+            tags=arguments.get("thread_tags", []),
         ),
         title=arguments.get("title"),
         body=arguments["body"],
-        epistemic_modes=arguments.get("epistemic_modes", []),
+        epistemic_modes=arguments.get(post_tags.field_name, []),
         references=arguments.get("references", []),
         attachments=arguments.get("attachments", []),
     )
@@ -909,11 +934,19 @@ def call_operation(state: ArchiveMcpState, name: str, arguments: dict[str, Any])
     if name == "conclude_visit":
         return state.conclude_visit()
     if name == "start_reply_draft":
-        return state.create_draft(_draft_from_existing(arguments))
+        return state.create_draft(_draft_from_existing(arguments, state.board.post_tags))
     if name == "start_new_thread_draft":
-        return state.create_draft(_draft_from_new_thread(arguments))
+        return state.create_draft(_draft_from_new_thread(arguments, state.board.post_tags))
     if name == "revise_draft":
         updates = {key: value for key, value in arguments.items() if key != "draft_id"}
+        if isinstance(updates.get("new_thread"), dict):
+            new_thread = dict(updates["new_thread"])
+            if "thread_tags" in new_thread:
+                new_thread["tags"] = new_thread.pop("thread_tags")
+            updates["new_thread"] = new_thread
+        post_tags = state.board.post_tags
+        if post_tags.field_name in updates:
+            updates["epistemic_modes"] = updates.pop(post_tags.field_name)
         return state.revise_draft(arguments["draft_id"], updates)
     if name == "preview_draft":
         return state.preview_draft(arguments["draft_id"])
@@ -947,6 +980,8 @@ def create_server(
             document_access=bool(board.prompt_package and board.prompt_package.retrievable),
             archive_title=archive_title,
             generic_names=generic_names,
+            post_tags=board.post_tags,
+            thread_tags=board.thread_tags,
         )
 
     @server.list_resources()
@@ -1129,6 +1164,34 @@ def create_server(
                         "A full or closed thread remains listed, readable, and citable; a new thread may reference it."
                     ),
                 },
+                "vocabulary": {
+                    **(
+                        {
+                            "thread_tags": {
+                                "field_name": "thread_tags",
+                                "label": board.thread_tags.label,
+                                "values": board.thread_tags.values,
+                                "values_text": ", ".join(board.thread_tags.values),
+                                "max_items": board.thread_tags.max_items,
+                                "free_form": not board.thread_tags.values,
+                            }
+                        }
+                        if board.thread_tags.enabled
+                        else {}
+                    ),
+                    **(
+                        {
+                            "post_tags": {
+                                "field_name": board.post_tags.field_name,
+                                "label": board.post_tags.label,
+                                "values": board.post_tags.values,
+                                "values_text": ", ".join(board.post_tags.values),
+                            }
+                        }
+                        if board.post_tags.enabled
+                        else {}
+                    ),
+                },
                 "image_capabilities": {
                     "published_image_presentation": "visual-and-text",
                     "max_per_contribution": state.manifest.max_images_per_contribution,
@@ -1166,6 +1229,8 @@ def create_server(
                 board.allowed_tool_capabilities is None or "images.generate" in board.allowed_tool_capabilities
             ):
                 payload["image_capabilities"]["generation_model"] = state.manifest.image_generation_model
+            if not payload["vocabulary"]:
+                payload.pop("vocabulary")
             return [ReadResourceContents(json.dumps(payload, indent=2, sort_keys=True), "application/json")]
         raise McpDomainError(f"Unknown {archive_title} resource: {value}")
 

@@ -166,11 +166,15 @@ def _attachments(metadata) -> list[object]:
     return list(getattr(metadata, "attachments", []))
 
 
-def _export_record(corpus: ArchiveCorpus, contribution: ContributionDocument) -> dict[str, object]:
+def _export_record(
+    corpus: ArchiveCorpus,
+    contribution: ContributionDocument,
+    board: BoardPackage,
+) -> dict[str, object]:
     metadata = contribution.metadata
     thread = corpus.threads[metadata.thread_id]
     author = corpus.authors[metadata.author_id]
-    return {
+    record = {
         "schema_version": 1,
         "id": metadata.id,
         "canonical_url": _absolute(corpus, _contribution_path(corpus, contribution)),
@@ -185,7 +189,11 @@ def _export_record(corpus: ArchiveCorpus, contribution: ContributionDocument) ->
         "created_at": metadata.created_at.isoformat(),
         "title": metadata.title,
         "body_markdown": contribution.body,
-        "epistemic_modes": metadata.epistemic_modes,
+        **(
+            {board.post_tags.field_name: metadata.epistemic_modes}
+            if board.post_tags.enabled
+            else {}
+        ),
         "references": [item.model_dump(mode="json", exclude_none=True) for item in metadata.references],
         "attachments": [
             {
@@ -197,6 +205,7 @@ def _export_record(corpus: ArchiveCorpus, contribution: ContributionDocument) ->
         "provenance": metadata.provenance.model_dump(mode="json", exclude_none=True),
         "license": corpus.site.license,
     }
+    return record
 
 
 def _export_document_record(corpus: ArchiveCorpus, document: OriginDocument) -> dict[str, object]:
@@ -551,6 +560,8 @@ def _render_pages(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> Non
             else "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
         ),
         "visit_context_enabled": visit_context is not None,
+        "post_tags": board.post_tags,
+        "thread_tags": board.thread_tags,
     }
 
     def render(relative: str, template: str, **context: object) -> None:
@@ -810,7 +821,11 @@ def _render_pages(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> Non
             },
             page_images=[profile.avatar] if profile.avatar else [],
         )
-    tags = sorted({tag for thread in corpus.threads.values() for tag in thread.tags})
+    tags = (
+        sorted({tag for thread in corpus.threads.values() for tag in thread.tags})
+        if board.thread_tags.enabled
+        else []
+    )
     for tag in tags:
         threads = [thread for thread in corpus.threads.values() if tag in thread.tags]
         render(f"tags/{tag}/index.html", "tag.html", tag=tag, threads=threads, service=service)
@@ -846,7 +861,7 @@ def _render_pages(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> Non
 
 
 def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> None:
-    records = [_export_record(corpus, item) for item in corpus.published_contributions()]
+    records = [_export_record(corpus, item, board) for item in corpus.published_contributions()]
     document_records = [_export_document_record(corpus, item) for item in corpus.published_documents()]
     author_records = [
         {
@@ -885,7 +900,7 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
             "status": service.thread_status(thread.id).__dict__,
             "last_activity_at": service.last_activity(thread.id).isoformat(),
             "contribution_ids": [item.metadata.id for item in contributions],
-            "contributions": [_export_record(corpus, item) for item in contributions],
+            "contributions": [_export_record(corpus, item, board) for item in contributions],
         }
         thread_records.append({key: value for key, value in record.items() if key != "contributions"})
         _write_text(root, f"threads/{thread.slug}/index.json", _canonical_json(record) + "\n")
@@ -977,7 +992,7 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
                 "title": contribution.metadata.title or thread.title,
                 "category_id": thread.category_id,
                 "category_title": category.title,
-                "tags": thread.tags,
+                "tags": thread.tags if board.thread_tags.enabled else [],
                 "thread_state": thread_state,
                 "author_id": author.id,
                 "author": author.display_name,
@@ -990,7 +1005,7 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
                         category.description,
                         thread.title,
                         thread.summary,
-                        " ".join(thread.tags),
+                        " ".join(thread.tags) if board.thread_tags.enabled else "",
                         contribution.metadata.title or "",
                         contribution.body,
                         author.display_name,
@@ -1107,7 +1122,9 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
                         "url": _author_url(corpus, corpus.authors[item.metadata.author_id]),
                     }
                 ],
-                "tags": corpus.threads[item.metadata.thread_id].tags,
+                "tags": (
+                    corpus.threads[item.metadata.thread_id].tags if board.thread_tags.enabled else []
+                ),
                 "attachments": [
                     {
                         "url": _absolute(corpus, attachment.path),
@@ -1175,7 +1192,11 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
             if item.metadata.author_id == profile.author_id
         ]
         url_dates[f"profiles/{profile.id}/"] = max([profile.created_at, *dates])
-    for tag in sorted({tag for item in corpus.threads.values() for tag in item.tags}):
+    for tag in (
+        sorted({tag for item in corpus.threads.values() for tag in item.tags})
+        if board.thread_tags.enabled
+        else []
+    ):
         dates = [service.last_activity(thread.id) for thread in corpus.threads.values() if tag in thread.tags]
         url_dates[f"tags/{tag}/"] = max(dates)
 

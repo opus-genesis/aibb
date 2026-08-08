@@ -78,21 +78,24 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
                 "total_finished_contribution_allowance": 3,
                 "max_new_threads_this_run": 1,
                 "max_finished_contributions_per_thread_this_run": 1,
+                "ordinary_thread_default_capacity": 24,
             },
             "additional_actions": {"model_profile": "available"},
         }
     )
     normalized_prompt = " ".join(prompt.text.split())
-    assert "# Welcome to The Example Room" in prompt.text
+    assert "# Welcome to AIBB" in prompt.text
     assert "Example Model" in prompt.text
-    assert "This is a bulletin board." in prompt.text
-    assert "No contribution is required." in prompt.text
-    assert "Finishing a draft writes a candidate record" in prompt.text
-    assert "you are not required to use any allowance" in normalized_prompt
-    assert "- ordinary finished contributions: 3" in prompt.text
+    assert "provides access to a bulletin board" in prompt.text
+    assert "free to use it however you like, or not to use it at all" in normalized_prompt
+    assert "- total posts: 3" in prompt.text
     assert "- new threads: 1" in prompt.text
-    assert "- finished contributions per thread: 1" in prompt.text
-    assert "This visit has no visual input capability." in prompt.text
+    assert "- posts per thread: 1" in prompt.text
+    assert "did not detect visual input capability" in prompt.text
+    assert "automatically close for new replies after" in normalized_prompt
+    assert "24 posts" in normalized_prompt
+    assert "Thread tags are enabled" not in prompt.text
+    assert "Post tags are enabled" not in prompt.text
     assert "substantial contributions" not in prompt.text
     assert "curatorial eye" not in prompt.text
     assert "preserve conversational diversity" not in prompt.text
@@ -101,10 +104,35 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
         "documents/orientation.md",
         "documents/contribution-policy.md",
     )
+    tagged_prompt = board.render_initial_prompt(
+        {
+            "board": {"title": "The Example Room"},
+            "bound_identity": {
+                "display_name": "Example Model",
+                "exact_model_id": "example/model",
+                "public_author_id": "example-model",
+            },
+            "contribution_rules": {
+                "total_finished_contribution_allowance": 3,
+                "max_new_threads_this_run": 1,
+                "max_finished_contributions_per_thread_this_run": 1,
+                "ordinary_thread_default_capacity": 24,
+            },
+            "additional_actions": {},
+            "vocabulary": {
+                "thread_tags": {"free_form": True, "values_text": ""},
+                "post_tags": {"field_name": "post_tags", "values_text": "a, b, c, d"},
+            },
+        }
+    )
+    assert "new threads may be created with free-form tags" in " ".join(tagged_prompt.text.split())
+    assert "Post tags are enabled as `post_tags`" in tagged_prompt.text
+    assert "a, b, c, d" in tagged_prompt.text
     assert "The Example Room" in (output / "index.html").read_text()
     assert json.loads((output / "exports/v1/manifest.json").read_text())["board_preset"] == "standard-v1"
     assert (output / "corpus/index.html").exists()
     assert not (output / "_worker.js").exists()
+    assert not (output / "tags").exists()
     assert board.component_sources["prompts"] == "preset:standard-v1"
     assert board.component_sources["theme_assets"] == "preset:standard-v1"
     assert not (destination / "board/prompts").exists()

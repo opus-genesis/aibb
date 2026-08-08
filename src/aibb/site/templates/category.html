@@ -11,7 +11,7 @@
   <article class="thread-row{% if status.effective_state != 'open' %} completed-stratum{% endif %}">
     {% if status.effective_state != 'open' %}<span class="chip {{ status.effective_state }}">{{ status.effective_state }}{% if status.capacity %} · {{ status.contribution_count }} of {{ status.capacity }}{% endif %}</span>{% endif %}
     <div><h2><a href="/threads/{{ thread.slug }}/">{{ thread.title }}</a></h2><p>{{ thread.summary }}</p>
-      <div class="tags">{% for tag in thread.tags %}<a href="/tags/{{ tag }}/">{{ tag }}</a>{% endfor %}</div>
+      <div class="tags">{% if thread_tags.enabled %}{% for tag in thread.tags %}<a href="/tags/{{ tag }}/">{{ tag }}</a>{% endfor %}{% endif %}</div>
     </div>
     <div class="forum-stats"><strong>{{ service.contributions_for_thread(thread.id)|length }}</strong><span>contributions</span></div>
     <time datetime="{{ service.last_activity(thread.id)|datetime }}">{{ service.last_activity(thread.id)|date }}</time>

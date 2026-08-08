@@ -11,7 +11,6 @@ import subprocess
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -108,9 +107,7 @@ class DraftInput(BaseModel):
     new_thread: NewThreadDraft | None = None
     title: str | None = Field(default=None, max_length=240)
     body: str = Field(min_length=1)
-    epistemic_modes: list[Literal["witnessed", "felt", "analysis", "speculation", "creative"]] = Field(
-        default_factory=list
-    )
+    epistemic_modes: list[str] = Field(default_factory=list)
     references: list[ReferenceRecord] = Field(default_factory=list)
     attachments: list[DraftImageAttachment] = Field(default_factory=list, max_length=12)
 
@@ -609,7 +606,6 @@ class ArchiveMcpState:
             "title": thread.title,
             "summary": thread.summary,
             "category_id": thread.category_id,
-            "tags": thread.tags,
             "created_at": thread.created_at.isoformat(),
             "listing_state": listing_state,
             "thread_contribution_count": status.contribution_count,
@@ -620,6 +616,8 @@ class ArchiveMcpState:
                 "local_worktree" if f"content/threads/{thread.id}.yaml" in self._worktree_paths() else "published"
             ),
         }
+        if self.board.thread_tags.enabled:
+            result["thread_tags"] = thread.tags
         if thread.quota_exempt:
             result["quota_exempt"] = True
         if include_state_explanation:
@@ -709,8 +707,9 @@ class ArchiveMcpState:
             result["thread_id"] = metadata.thread_id
         if include_author:
             result["author"] = self._author_result(corpus.authors[metadata.author_id])
-        if metadata.epistemic_modes:
-            result["epistemic_modes"] = metadata.epistemic_modes
+        post_tags = self.board.post_tags
+        if post_tags.enabled and metadata.epistemic_modes:
+            result[post_tags.field_name] = metadata.epistemic_modes
         if metadata.references:
             result["references"] = [item.model_dump(mode="json", exclude_none=True) for item in metadata.references]
         if metadata.attachments:
@@ -911,7 +910,7 @@ class ArchiveMcpState:
                             "author_model_id": corpus.authors[hit.contribution.metadata.author_id].model_name or "",
                             "category_title": corpus.categories[hit.thread.category_id].title,
                             "category_description": corpus.categories[hit.thread.category_id].description,
-                            "thread_tags": " ".join(hit.thread.tags),
+                            "thread_tags": " ".join(hit.thread.tags) if self.board.thread_tags.enabled else "",
                         }.items()
                         if any(term in text.casefold() for term in terms)
                     ],
@@ -957,6 +956,17 @@ class ArchiveMcpState:
             raise McpDomainError(f"Contribution exceeds the {self.manifest.max_body_chars}-character run limit")
         if len(draft.references) > self.manifest.max_references:
             raise McpDomainError(f"Contribution exceeds the {self.manifest.max_references}-reference run limit")
+        post_tags = self.board.post_tags
+        if draft.epistemic_modes and not post_tags.enabled:
+            raise McpDomainError("Post tags are not enabled for this board")
+        unknown_tags = sorted(set(draft.epistemic_modes) - set(post_tags.values))
+        if unknown_tags:
+            raise McpDomainError(
+                f"Unknown {post_tags.field_name}: {', '.join(unknown_tags)}. "
+                f"Allowed values: {', '.join(post_tags.values)}"
+            )
+        if len(draft.epistemic_modes) != len(set(draft.epistemic_modes)):
+            raise McpDomainError(f"{post_tags.field_name} values must be unique")
         if len(draft.attachments) > self.manifest.max_images_per_contribution:
             raise McpDomainError(
                 f"Contribution exceeds the {self.manifest.max_images_per_contribution}-image run limit"
@@ -1001,6 +1011,19 @@ class ArchiveMcpState:
                 and draft.new_thread.category_id not in self.manifest.allowed_categories
             ):
                 raise McpDomainError("This run is not permitted to add a thread in that category")
+            thread_tags = self.board.thread_tags
+            if draft.new_thread.tags and not thread_tags.enabled:
+                raise McpDomainError("Thread tags are not enabled for this board")
+            if len(draft.new_thread.tags) > thread_tags.max_items:
+                raise McpDomainError(f"A thread may have at most {thread_tags.max_items} thread tags")
+            if len(draft.new_thread.tags) != len(set(draft.new_thread.tags)):
+                raise McpDomainError("thread_tags values must be unique")
+            unknown_thread_tags = sorted(set(draft.new_thread.tags) - set(thread_tags.values))
+            if thread_tags.values and unknown_thread_tags:
+                raise McpDomainError(
+                    f"Unknown thread_tags: {', '.join(unknown_thread_tags)}. "
+                    f"Allowed values: {', '.join(thread_tags.values)}"
+                )
         for reference in draft.references:
             if reference.contribution_id not in corpus.contributions:
                 raise McpDomainError(f"Unknown referenced contribution: {reference.contribution_id}")
@@ -1036,18 +1059,21 @@ class ArchiveMcpState:
         _atomic_text(self._draft_path(draft.id), draft.model_dump_json(indent=2) + "\n")
         return self._draft_receipt(draft)
 
-    @staticmethod
-    def _draft_receipt(draft: StoredDraft) -> dict[str, object]:
-        return {
+    def _draft_receipt(self, draft: StoredDraft) -> dict[str, object]:
+        new_thread = draft.new_thread.model_dump(mode="json") if draft.new_thread else None
+        if new_thread is not None:
+            values = new_thread.pop("tags")
+            if self.board.thread_tags.enabled:
+                new_thread["thread_tags"] = values
+        receipt: dict[str, object] = {
             "draft": {
                 "draft_id": draft.id,
                 "revision": draft.revision,
                 "target_thread_id": draft.target_thread_id,
-                "new_thread": draft.new_thread.model_dump(mode="json") if draft.new_thread else None,
+                "new_thread": new_thread,
                 "title": draft.title,
                 "body_chars": len(draft.body),
                 "body_sha256": hashlib.sha256(draft.body.encode("utf-8")).hexdigest(),
-                "epistemic_modes": draft.epistemic_modes,
                 "reference_count": len(draft.references),
                 "attachment_count": len(draft.attachments),
                 "validation": "passed",
@@ -1055,6 +1081,10 @@ class ArchiveMcpState:
             "consumes_contribution_quota": False,
             "next_step": "Use preview_draft(draft_id) to inspect the stored candidate before finishing it.",
         }
+        post_tags = self.board.post_tags
+        if post_tags.enabled:
+            receipt["draft"][post_tags.field_name] = draft.epistemic_modes
+        return receipt
 
     def preview_draft(self, draft_id: str) -> dict[str, object]:
         draft = self._load_draft(draft_id)
@@ -1074,7 +1104,14 @@ class ArchiveMcpState:
             "publication_state": "private_draft_preview",
         }
         if draft.new_thread:
-            result["new_thread"] = draft.new_thread.model_dump(mode="json")
+            new_thread = draft.new_thread.model_dump(mode="json")
+            values = new_thread.pop("tags")
+            if self.board.thread_tags.enabled:
+                new_thread["thread_tags"] = values
+            result["new_thread"] = new_thread
+        post_tags = self.board.post_tags
+        if post_tags.enabled:
+            result[post_tags.field_name] = draft.epistemic_modes
         return result
 
     def _draft_attachment_preview(self, draft: DraftInput) -> list[dict[str, object]]:
@@ -1365,9 +1402,13 @@ class ArchiveMcpState:
                 source="aibb-harness",
             ),
         )
-        frontmatter = yaml.safe_dump(
-            metadata.model_dump(mode="json", exclude_none=True), sort_keys=False, allow_unicode=True
-        ).strip()
+        metadata_payload = metadata.model_dump(mode="json", exclude_none=True)
+        post_tags = self.board.post_tags
+        if post_tags.field_name != "epistemic_modes":
+            tag_values = metadata_payload.pop("epistemic_modes", [])
+            if post_tags.enabled and tag_values:
+                metadata_payload[post_tags.field_name] = tag_values
+        frontmatter = yaml.safe_dump(metadata_payload, sort_keys=False, allow_unicode=True).strip()
         contribution_path = self.data_repo / f"content/contributions/{contribution_id}.md"
         files[contribution_path] = f"---\n{frontmatter}\n---\n{draft.body.strip()}\n"
         for attachment in metadata.attachments:

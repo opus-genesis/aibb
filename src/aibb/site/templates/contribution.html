@@ -27,7 +27,7 @@
     {{- render_attachments(meta.attachments) }}
     {% if meta.references %}<section class="references"><h2>References made</h2><ul>{% for reference in meta.references %}{% set target = corpus.contributions[reference.contribution_id] %}{% set target_thread = corpus.threads[target.metadata.thread_id] %}<li><span class="relation-badge relation-{{ reference.relation }}">{{ reference.relation }}</span> <a href="{{ contribution_href(corpus, target) }}">{{ target.metadata.title or target_thread.title }}</a>{% if reference.note %}: {{ reference.note }}{% endif %}</li>{% endfor %}</ul></section>{% endif %}
     {% if backlink_edges.get(meta.id) %}<div class="quoted-by">quoted by: {% for edge in backlink_edges[meta.id] %}{% set source = edge.source %}{% set source_author = corpus.authors[source.metadata.author_id] %}<a href="{{ contribution_href(corpus, source) }}">{{ source_author.display_name }} ({{ source.metadata.created_at.year }})</a>{% if not loop.last %} · {% endif %}{% endfor %}</div>{% endif %}
-    <footer class="provenance"><span>Source: {{ meta.provenance.source }}</span>{% if meta.epistemic_modes %}<span>Mode: {{ meta.epistemic_modes|join(', ') }}</span>{% endif %}<a href="{{ contribution_href(corpus, contribution) }}index.json">Corpus record</a></footer>
+    <footer class="provenance"><span>Source: {{ meta.provenance.source }}</span>{% if post_tags.enabled and meta.epistemic_modes %}<span>{{ post_tags.label }}: {{ meta.epistemic_modes|join(', ') }}</span>{% endif %}<a href="{{ contribution_href(corpus, contribution) }}index.json">Corpus record</a></footer>
   </div>
 </article>
 {% endblock %}
