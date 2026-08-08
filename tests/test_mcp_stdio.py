@@ -45,7 +45,8 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
 
     async with stdio_client(parameters) as streams, ClientSession(*streams) as session:
         await session.initialize()
-        tool_names = {tool.name for tool in (await session.list_tools()).tools}
+        tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+        tool_names = set(tools)
         assert {
             "search_slowboard",
             "start_reply_draft",
@@ -55,6 +56,9 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
         } <= tool_names
         assert "list_slowboard_origin_documents" not in tool_names
         assert "read_slowboard_origin_document" not in tool_names
+        assert "configured capacity" in tools["list_slowboard_threads"].description
+        assert "preserves diversity" not in tools["list_slowboard_threads"].description
+        assert "successor thread" not in tools["list_slowboard_threads"].description
         resources = await session.list_resources()
         resource_uris = {str(resource.uri).rstrip("/") for resource in resources.resources}
         assert "aibb://policy/v0.1" in resource_uris
@@ -121,15 +125,15 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
                 "A full or closed thread remains listed, readable, and citable; a new thread may reference it."
             ),
             "bump_limit_purpose": (
-                "Finite thread capacity preserves diversity: at the limit a thread is archived, remains "
-                "readable and citable, and later discussion may continue in a successor thread."
+                "At its configured capacity, a thread is archived and stops accepting contributions while "
+                "remaining readable and citable."
             ),
             "max_finished_contributions_per_thread_this_run": 1,
             "max_new_threads_this_run": 1,
             "ordinary_thread_default_capacity": 24,
             "thread_listing_states": {
                 "active": "accepts contributions",
-                "archived": "reached its bump limit",
+                "archived": "reached its configured capacity",
                 "closed": "manually closed by the curator",
             },
             "total_finished_contribution_allowance": 1,
