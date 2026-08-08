@@ -100,6 +100,11 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
             "note": "No specific inference backend was pinned for this visit.",
             "provider_slug": None,
         }
+        assert bound["visit_lifecycle"] == {
+            "completion_is_irreversible": True,
+            "mode": "single",
+            "returning_visits_allowed": False,
+        }
         assert bound["additional_actions"] == {
             "guestbook_entry": (
                 "You may make at most one optional Guestbook entry during this visit. "
@@ -220,6 +225,11 @@ async def test_v2_board_scope_documents_and_tool_policy_share_one_projection(tmp
             "title": "Archive",
         }
         assert scope["context_versions"] == {"prompt_entrypoint": "initial"}
+        assert scope["visit_lifecycle"] == {
+            "completion_is_irreversible": True,
+            "mode": "single",
+            "returning_visits_allowed": False,
+        }
         assert "vocabulary" not in scope
         assert scope["headless_continuation"] == {
             "behavior": (

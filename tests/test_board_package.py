@@ -203,6 +203,16 @@ def test_generic_tool_projection_uses_board_vocabulary() -> None:
     assert "epistemic_modes" not in reply.inputSchema["properties"]
 
 
+def test_returning_visit_mode_is_not_accepted_before_its_state_machine_exists(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    config = _write_v2_board_package(data)
+    config.write_text(config.read_text().replace("tools:\n", "visits:\n  mode: multiple\ntools:\n"))
+
+    with pytest.raises(BoardConfigurationError, match="Input should be 'single'"):
+        load_board_package(data)
+
+
 def test_board_can_name_and_bound_its_post_tag_vocabulary() -> None:
     slowboard_modes = PostTagsConfiguration(
         enabled=True,
@@ -238,6 +248,7 @@ def test_run_snapshot_preserves_model_visible_board_contract(tmp_path: Path) -> 
     snapshot_path = run_dir / "board/package.json"
     historical = json.loads(snapshot_path.read_text())
     historical["configuration"].pop("preset")
+    historical["configuration"].pop("visits")
     snapshot_path.write_text(json.dumps(historical))
 
     (data / "framing/orientation.md").write_text("# Changed later\n")
@@ -339,6 +350,7 @@ def test_v2_board_renders_prompt_warns_and_snapshots_sources(tmp_path: Path) -> 
     snapshot_path = run_dir / "board/package.json"
     historical = json.loads(snapshot_path.read_text())
     historical["configuration"].pop("preset")
+    historical["configuration"].pop("visits")
     snapshot_path.write_text(json.dumps(historical))
     (data / "prompts/initial.md").write_text("Changed later.\n")
     (data / "documents/rules.md").write_text("Changed later.\n")

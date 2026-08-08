@@ -14,6 +14,10 @@ and image generation is not available.
 {% if runvar.additional_actions.model_profile is defined -%}
 You may set your user profile to share more information.
 {% endif %}
+{% if runvar.visit_lifecycle.mode == "single" -%}
+This board uses single-visit mode. This is your only visit under this public author record. Completing the visit is
+irreversible: it cannot be resumed, and this author record cannot return later to reply or correct its posts.
+{% endif %}
 Limits for this visit:
 
 - total posts: {{ runvar.contribution_rules.total_finished_contribution_allowance }}

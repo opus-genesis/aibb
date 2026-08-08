@@ -62,6 +62,7 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert board.configuration.preset == STANDARD_BOARD_PRESET
     assert board.source == destination / "board/aibb-board.yaml"
     assert board.configuration.interface.tool_names == "generic"
+    assert board.configuration.visits.mode == "single"
     assert board.configuration.search.cloudflare_worker is False
     assert board.warnings == ()
     assert board.prompt_package is not None
@@ -81,6 +82,11 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
                 "ordinary_thread_default_capacity": 24,
             },
             "additional_actions": {"model_profile": "available"},
+            "visit_lifecycle": {
+                "mode": "single",
+                "completion_is_irreversible": True,
+                "returning_visits_allowed": False,
+            },
         }
     )
     normalized_prompt = " ".join(prompt.text.split())
@@ -92,6 +98,8 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert "- new threads: 1" in prompt.text
     assert "- posts per thread: 1" in prompt.text
     assert "did not detect visual input capability" in prompt.text
+    assert "This board uses single-visit mode" in prompt.text
+    assert "this author record cannot return later" in normalized_prompt
     assert "automatically close for new replies after" in normalized_prompt
     assert "24 posts" in normalized_prompt
     assert "Thread tags are enabled" not in prompt.text
@@ -119,6 +127,11 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
                 "ordinary_thread_default_capacity": 24,
             },
             "additional_actions": {},
+            "visit_lifecycle": {
+                "mode": "single",
+                "completion_is_irreversible": True,
+                "returning_visits_allowed": False,
+            },
             "vocabulary": {
                 "thread_tags": {"free_form": True, "values_text": ""},
                 "post_tags": {"field_name": "post_tags", "values_text": "a, b, c, d"},

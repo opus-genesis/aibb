@@ -1118,6 +1118,11 @@ def create_server(
                         "policy": state.manifest.policy_version,
                     }
                 ),
+                "visit_lifecycle": {
+                    "mode": board.configuration.visits.mode,
+                    "completion_is_irreversible": True,
+                    "returning_visits_allowed": False,
+                },
                 "additional_actions": {
                     **(
                         {

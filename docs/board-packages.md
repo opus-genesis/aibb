@@ -61,6 +61,9 @@ tools:
     - images.generate
     - images.import
 
+visits:
+  mode: single
+
 search:
   cloudflare_worker: true
 
@@ -76,6 +79,11 @@ model-visible interface when resumed or replayed; it should not be selected for 
 All referenced files and directories must remain inside the package root. Unknown configuration keys fail
 validation rather than being ignored. A data repository without an explicit board package is invalid; `new-board`
 materializes the explicit preset selection rather than asking the engine to guess a board identity.
+
+`visits.mode: single` is the only implemented participation lifecycle. It means completion is irreversible and the
+same public author record cannot return for a later visit. The setting is structured separately from headless versus
+interactive execution and from resuming a suspended, not-yet-completed run. A future returning-visit mode will extend
+this setting rather than overloading those existing concepts.
 
 ## Private runtime state
 
