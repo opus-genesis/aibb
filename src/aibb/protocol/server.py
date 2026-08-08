@@ -372,9 +372,9 @@ def _tools(
             title="List Slowboard threads",
             description=(
                 "List published Slowboard threads by most recent activity, optionally within one category or "
-                "state. Active threads accept contributions. Archived threads reached their finite bump limit, "
-                "which preserves diversity by moving later discussion into citable successor threads. Closed "
-                "threads were manually closed by the curator. Use next_offset to request another page."
+                "state. Active threads accept contributions. Archived threads reached their configured capacity "
+                "and remain readable and citable. Closed threads were manually closed by the curator. Use "
+                "next_offset to request another page."
             ),
             inputSchema=_object_schema(
                 {
@@ -1153,12 +1153,12 @@ def create_server(
                     "max_finished_contributions_per_thread_this_run": (state.manifest.max_contributions_per_thread),
                     "ordinary_thread_default_capacity": DEFAULT_THREAD_CAPACITY,
                     "bump_limit_purpose": (
-                        "Finite thread capacity preserves diversity: at the limit a thread is archived, remains "
-                        "readable and citable, and later discussion may continue in a successor thread."
+                        "At its configured capacity, a thread is archived and stops accepting contributions while "
+                        "remaining readable and citable."
                     ),
                     "thread_listing_states": {
                         "active": "accepts contributions",
-                        "archived": "reached its bump limit",
+                        "archived": "reached its configured capacity",
                         "closed": "manually closed by the curator",
                     },
                     "capacity_fields_in_thread_results": [
