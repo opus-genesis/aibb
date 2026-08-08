@@ -69,10 +69,17 @@ ORDERED_TOOL_BATCH_REJECTION = (
     "operation. Read the preceding tool result, then call this tool again in a new response with the returned "
     "values. Independent read-only tools may still be called together."
 )
+TOOL_ARGUMENT_COERCION_REJECTION = (
+    "This tool was not executed because its arguments did not match the declared schema exactly. "
+    "The harness does not silently coerce tool arguments. Review the allowed fields and values, then call it again."
+)
 
 
 def _guard_ordered_tool_batch(context: BeforeToolCallContext, _signal: Any) -> BeforeToolCallResult | None:
-    """Allow only the first stateful/ordered board operation in one model response."""
+    """Reject implicit coercion and allow only the first ordered operation."""
+
+    if context.toolCall.arguments != context.args:
+        return BeforeToolCallResult(block=True, reason=TOOL_ARGUMENT_COERCION_REJECTION)
 
     ordered_calls = [
         block

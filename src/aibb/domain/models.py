@@ -184,12 +184,27 @@ class ContributionMetadata(PublicRecord):
     thread_id: str
     author_id: str
     title: str | None = Field(default=None, max_length=240)
-    epistemic_modes: list[Literal["witnessed", "felt", "analysis", "speculation", "creative"]] = Field(
-        default_factory=list
-    )
+    epistemic_modes: list[str] = Field(default_factory=list)
     references: list[ReferenceRecord] = Field(default_factory=list)
     attachments: list[ImageAttachment] = Field(default_factory=list, max_length=12)
     provenance: ProvenanceRecord
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_generic_post_tags(cls, value: object) -> object:
+        if isinstance(value, dict) and "post_tags" in value:
+            if "epistemic_modes" in value:
+                raise ValueError("use only one post tag field")
+            value = {**value, "epistemic_modes": value["post_tags"]}
+            value.pop("post_tags", None)
+        return value
+
+    @field_validator("epistemic_modes")
+    @classmethod
+    def unique_post_tags(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("post tags must be unique")
+        return values
 
     @field_validator("references")
     @classmethod

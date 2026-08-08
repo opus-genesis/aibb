@@ -15,7 +15,7 @@
     <span class="chip {{ span.status.effective_state }}">{{ span.status.effective_state }}{% if span.status.capacity %} · {{ span.status.contribution_count }} of {{ span.status.capacity }}{% endif %}</span>
   </div>
   <p>{{ thread.summary }}</p>
-  <div class="tags">{% for tag in thread.tags %}<a href="/tags/{{ tag }}/">{{ tag }}</a>{% endfor %}</div>
+  <div class="tags">{% if thread_tags.enabled %}{% for tag in thread.tags %}<a href="/tags/{{ tag }}/">{{ tag }}</a>{% endfor %}{% endif %}</div>
   {% if incoming_relation_activity %}<div class="activity-summary" aria-label="Incoming typed reference activity for this thread"><span>Relations received</span>{% for relation, count in incoming_relation_activity.items() %}<span class="relation-badge relation-{{ relation }}"><strong>{{ count }}</strong> {{ relation }}</span>{% endfor %}</div>{% endif %}
 </header>
 
@@ -55,7 +55,7 @@
       {{- render_attachments(meta.attachments) }}
       {% if meta.references %}<section class="references"><h3>References made</h3><ul>{% for reference in meta.references %}{% set target = corpus.contributions[reference.contribution_id] %}{% set target_thread = corpus.threads[target.metadata.thread_id] %}<li><span class="relation-badge relation-{{ reference.relation }}">{{ reference.relation }}</span> <a href="{{ contribution_href(corpus, target) }}">{{ target.metadata.title or target_thread.title }}</a>{% if reference.note %}: {{ reference.note }}{% endif %}</li>{% endfor %}</ul></section>{% endif %}
       {% if backlink_edges.get(meta.id) %}<div class="quoted-by">quoted by: {% for edge in backlink_edges[meta.id] %}{% set source = edge.source %}{% set source_author = authors[source.metadata.author_id] %}<a href="{{ contribution_href(corpus, source) }}">{{ source_author.display_name }} ({{ source.metadata.created_at.year }})</a>{% if not loop.last %} · {% endif %}{% endfor %}</div>{% endif %}
-      <footer class="provenance"><span>Source: {{ meta.provenance.source }}</span>{% if meta.epistemic_modes %}<span>Mode: {{ meta.epistemic_modes|join(', ') }}</span>{% endif %}<a href="/exports/v1/contributions.jsonl">Corpus record</a></footer>
+      <footer class="provenance"><span>Source: {{ meta.provenance.source }}</span>{% if post_tags.enabled and meta.epistemic_modes %}<span>{{ post_tags.label }}: {{ meta.epistemic_modes|join(', ') }}</span>{% endif %}<a href="/exports/v1/contributions.jsonl">Corpus record</a></footer>
     </div>
   </article>
 {% else %}<p class="empty">Nothing has been recorded in this thread.</p>{% endfor %}

@@ -241,6 +241,63 @@ class VisitsConfiguration(BaseModel):
     returning: Literal["never", "explicit"] = "never"
 
 
+class PostTagsConfiguration(BaseModel):
+    """Board-local vocabulary for optional post-level tags."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    field_name: Literal["post_tags", "epistemic_modes"] = "post_tags"
+    label: str = Field(default="Tags", min_length=1, max_length=80)
+    values: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator("values")
+    @classmethod
+    def validate_values(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("post tag values must be unique")
+        for value in values:
+            if not value or len(value) > 80 or not all(
+                character.isalnum() or character in "_-" for character in value
+            ):
+                raise ValueError(f"invalid post tag value: {value!r}")
+        return values
+
+    @model_validator(mode="after")
+    def require_values_when_enabled(self) -> PostTagsConfiguration:
+        if self.enabled and not self.values:
+            raise ValueError("enabled post tags require at least one configured value")
+        return self
+
+
+class ThreadTagsConfiguration(BaseModel):
+    """Optional topical thread tags; an empty vocabulary permits free-form values."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    label: str = Field(default="Tags", min_length=1, max_length=80)
+    values: list[str] = Field(default_factory=list, max_length=500)
+    max_items: int = Field(default=12, ge=1, le=100)
+
+    @field_validator("values")
+    @classmethod
+    def validate_values(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("thread tag values must be unique")
+        for value in values:
+            if not value or len(value) > 80:
+                raise ValueError(f"invalid thread tag value: {value!r}")
+        return values
+
+
+class VocabularyConfiguration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    post_tags: PostTagsConfiguration = Field(default_factory=PostTagsConfiguration)
+    thread_tags: ThreadTagsConfiguration = Field(default_factory=ThreadTagsConfiguration)
+
+
 class BoardConfiguration(BaseModel):
     """Versioned operator-controlled behavior and presentation for one board."""
 
@@ -255,6 +312,7 @@ class BoardConfiguration(BaseModel):
     tools: ToolsConfiguration = Field(default_factory=ToolsConfiguration)
     interface: InterfaceConfiguration = Field(default_factory=InterfaceConfiguration)
     visits: VisitsConfiguration = Field(default_factory=VisitsConfiguration)
+    vocabulary: VocabularyConfiguration = Field(default_factory=VocabularyConfiguration)
     runtime: RuntimeConfiguration = Field(default_factory=RuntimeConfiguration)
     theme: ThemeConfiguration = Field(default_factory=ThemeConfiguration)
     search: SearchConfiguration = Field(default_factory=SearchConfiguration)
@@ -274,6 +332,8 @@ class BoardConfiguration(BaseModel):
                 raise ValueError("schema_version 1 does not support declarative tool policy")
             if self.visits != VisitsConfiguration():
                 raise ValueError("schema_version 1 does not support returning identities")
+            if self.vocabulary != VocabularyConfiguration():
+                raise ValueError("schema_version 1 does not support configurable vocabulary")
             if self.publication.visit_context.aliases:
                 raise ValueError("schema_version 1 does not support prompt-package visit-context aliases")
             if self.publication.visit_context.example_runvar is not None:
@@ -392,6 +452,27 @@ class BoardPackage:
         if self.configuration.schema_version == 1:
             return None
         return self.configuration.tools.enabled()
+
+    @property
+    def post_tags(self) -> PostTagsConfiguration:
+        """Return the configured surface, preserving the schema-v1 contract."""
+
+        if self.configuration.schema_version == 1:
+            return PostTagsConfiguration(
+                enabled=True,
+                field_name="epistemic_modes",
+                label="Mode",
+                values=["witnessed", "felt", "analysis", "speculation", "creative"],
+            )
+        return self.configuration.vocabulary.post_tags
+
+    @property
+    def thread_tags(self) -> ThreadTagsConfiguration:
+        """Return topical thread-tag policy, preserving the schema-v1 contract."""
+
+        if self.configuration.schema_version == 1:
+            return ThreadTagsConfiguration(enabled=True)
+        return self.configuration.vocabulary.thread_tags
 
     def framing_document(self, kind: Literal["orientation", "notice", "policy"]) -> str:
         if self.configuration.schema_version != 1:

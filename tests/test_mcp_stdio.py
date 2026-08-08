@@ -111,6 +111,22 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
             ),
         }
         assert "optional_off_quota_actions" not in bound
+        assert bound["vocabulary"] == {
+            "post_tags": {
+                "field_name": "epistemic_modes",
+                "label": "Mode",
+                "values": ["witnessed", "felt", "analysis", "speculation", "creative"],
+                "values_text": "witnessed, felt, analysis, speculation, creative",
+            },
+            "thread_tags": {
+                "field_name": "thread_tags",
+                "free_form": True,
+                "label": "Tags",
+                "max_items": 12,
+                "values": [],
+                "values_text": "",
+            },
+        }
         assert "expiry" not in bound
         assert "calendar_utc_offset" not in bound
         assert "headless_continuation" not in bound
@@ -204,6 +220,7 @@ async def test_v2_board_scope_documents_and_tool_policy_share_one_projection(tmp
             "title": "Archive",
         }
         assert scope["context_versions"] == {"prompt_entrypoint": "initial"}
+        assert "vocabulary" not in scope
         assert scope["headless_continuation"] == {
             "behavior": (
                 "A response with no board tool call receives this fixed, non-directive harness message. "

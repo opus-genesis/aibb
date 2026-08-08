@@ -16,6 +16,17 @@ interface:
     Call conclude_visit again to end the session.
 visits:
   returning: never
+vocabulary:
+  post_tags:
+    enabled: false
+    field_name: post_tags
+    label: Tags
+    values: []
+  thread_tags:
+    enabled: false
+    label: Tags
+    values: []
+    max_items: 12
 theme:
   templates: theme/templates
   assets: theme/public

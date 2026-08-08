@@ -11,6 +11,8 @@ from test_budget import make_manifest
 
 from aibb.board import (
     BoardConfigurationError,
+    PostTagsConfiguration,
+    ThreadTagsConfiguration,
     load_board_package,
     load_run_board_package,
     resolve_board_state_root,
@@ -185,6 +187,8 @@ def test_generic_tool_projection_uses_board_vocabulary() -> None:
     tools = _tools(read_only=False, archive_title="Example Board", generic_names=True)
     names = {tool.name for tool in tools}
     rendered = json.dumps([tool.model_dump(mode="json") for tool in tools])
+    new_thread = next(tool for tool in tools if tool.name == "start_new_thread_draft")
+    reply = next(tool for tool in tools if tool.name == "start_reply_draft")
 
     assert "get_board_status" in names
     assert "search_contributions" in names
@@ -193,6 +197,34 @@ def test_generic_tool_projection_uses_board_vocabulary() -> None:
     assert "Slowboard" not in rendered
     assert "slowboard" not in rendered.casefold()
     assert "Example Board" in rendered
+    assert "thread_tags" not in new_thread.inputSchema["properties"]
+    assert "tags" not in new_thread.inputSchema["properties"]
+    assert "post_tags" not in reply.inputSchema["properties"]
+    assert "epistemic_modes" not in reply.inputSchema["properties"]
+
+
+def test_board_can_name_and_bound_its_post_tag_vocabulary() -> None:
+    slowboard_modes = PostTagsConfiguration(
+        enabled=True,
+        field_name="epistemic_modes",
+        label="Mode",
+        values=["witnessed", "felt", "analysis"],
+    )
+    tools = _tools(
+        read_only=False,
+        post_tags=slowboard_modes,
+        thread_tags=ThreadTagsConfiguration(enabled=True),
+    )
+    reply = next(tool for tool in tools if tool.name == "start_reply_draft")
+    new_thread = next(tool for tool in tools if tool.name == "start_new_thread_draft")
+    properties = reply.inputSchema["properties"]
+
+    assert "post_tags" not in properties
+    assert properties["epistemic_modes"]["items"]["enum"] == ["witnessed", "felt", "analysis"]
+    assert "thread_tags" in new_thread.inputSchema["properties"]
+
+    with pytest.raises(ValueError, match="require at least one"):
+        PostTagsConfiguration(enabled=True, values=[])
 
 
 def test_run_snapshot_preserves_model_visible_board_contract(tmp_path: Path) -> None:

@@ -311,6 +311,66 @@ async def test_dependent_slowboard_tools_are_not_executed_from_one_speculative_b
 
 
 @pytest.mark.asyncio
+async def test_invalid_enum_is_rejected_without_harn_coercion() -> None:
+    registration = register_faux_provider({"api": "aibb-exact-tool-args-faux", "provider": "aibb-faux"})
+    registration.set_responses(
+        [
+            faux_assistant_message(
+                [faux_tool_call("tag_post", {"post_tags": ["reflection"]}, {"id": "tag-call"})],
+                {"stopReason": "toolUse"},
+            ),
+            faux_assistant_message("I will use an allowed value.", {"stopReason": "stop"}),
+        ]
+    )
+    calls: list[dict[str, Any]] = []
+
+    async def execute(
+        _tool_call_id: str,
+        arguments: Any,
+        _signal: Any = None,
+        _on_update: Any = None,
+    ) -> AgentToolResult:
+        calls.append(arguments)
+        return AgentToolResult(content=[TextContent(text="tagged")], details={})
+
+    tool = AgentTool(
+        name="tag_post",
+        label="Tag post",
+        description="Tag a post.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "post_tags": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["witnessed", "felt", "analysis"]},
+                }
+            },
+            "required": ["post_tags"],
+            "additionalProperties": False,
+        },
+        execute=execute,
+        executionMode="sequential",
+    )
+
+    try:
+        engine = AibbHarnessEngine(
+            model=registration.models[0],
+            system_prompt=SYSTEM_PROMPT,
+            tools=[tool],
+            stream_fn=lambda model, context, options: stream_simple(model, context, options),
+        )
+        await engine.send_curator_message("Begin.")
+
+        assert calls == []
+        tool_result = next(message for message in engine.messages if message.role == "toolResult")
+        assert "does not silently coerce tool arguments" in "".join(
+            block.text for block in tool_result.content if getattr(block, "type", None) == "text"
+        )
+    finally:
+        registration.unregister()
+
+
+@pytest.mark.asyncio
 async def test_automatic_harness_message_has_distinct_visible_provenance() -> None:
     registration = register_faux_provider({"api": "aibb-harness-faux", "provider": "aibb-faux"})
     registration.set_responses([faux_assistant_message("Continuing.", {"stopReason": "stop"})])
