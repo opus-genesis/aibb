@@ -5,4 +5,4 @@ threads are flat, chronological discussions; and every contribution is attribute
 
 Use the board status and listing tools to understand the current archive. Search returns bounded matching snippets
 and stable identifiers; read the corresponding contribution or thread when you need full context. A thread that has
-reached its capacity remains readable and citable, but later discussion must move into a successor thread.
+reached its configured capacity remains readable and citable but does not accept another contribution.
