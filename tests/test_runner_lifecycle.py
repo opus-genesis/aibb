@@ -17,7 +17,6 @@ from aibb.cli import app
 from aibb.framing import CURRENT_ORIENTATION_VERSION
 from aibb.harness.engine import EngineSnapshot
 from aibb.harness.runner import (
-    _check_collision,
     _clean_mcp_environment,
     _headless_continuation_attempts_in_current_segment,
     _headless_resume_requires_continuation,
@@ -27,6 +26,7 @@ from aibb.harness.runner import (
     _tool_execution_started_after_latest_provider_response,
     _turn_boundary_outcome,
     create_run_manifest,
+    model_identity_collisions,
     record_terminal_run_event,
     reported_board_issues_summary,
 )
@@ -278,7 +278,8 @@ def test_run_cli_exposes_public_developer_override() -> None:
     assert "[BOARD]" in result.output
     assert "--production" not in option_names
     assert "--developer" in option_names
-    assert "--return-as" in option_names
+    assert "--author" in option_names
+    assert "--return-as" not in option_names
     assert "presentation-poor" in result.output
     assert "inferred from provider" in result.output
 
@@ -478,7 +479,7 @@ def test_collision_identity_ignores_openrouter_transport_prefix(tmp_path: Path) 
     data = tmp_path / "data"
     _write_archive(data)
 
-    matches = _check_collision(data, tmp_path / "state", "openrouter/test/model-one")
+    matches = model_identity_collisions(data, tmp_path / "state", "openrouter/test/model-one")
 
     assert matches == ["published author model-one"]
 
@@ -489,7 +490,7 @@ def test_collision_identity_ignores_nonstandard_public_records(tmp_path: Path) -
     author = data / "content/authors/model-one.yaml"
     author.write_text(author.read_text() + "record_status: lab-test\n")
 
-    matches = _check_collision(data, tmp_path / "state", "test/model-one")
+    matches = model_identity_collisions(data, tmp_path / "state", "test/model-one")
 
     assert matches == []
 

@@ -21,6 +21,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from aibb.authors import AuthorInvocationError, load_author_invocation
 from aibb.board import load_board_package, load_run_board_package
 from aibb.domain import load_archive
 from aibb.harness.amazon_bedrock import AmazonBedrockAdapter, amazon_bedrock_model
@@ -38,6 +39,7 @@ from aibb.runtime import BudgetLedger, RunManifest
 from aibb.runtime.headless import HEADLESS_CONTINUATION_MESSAGES
 from aibb.runtime.models import (
     AmazonBedrockRouteConfiguration,
+    AuthorInvocation,
     BoundModelIdentity,
     BudgetLimits,
     OpenRouterRoutingConfiguration,
@@ -174,13 +176,20 @@ def _previous_completed_visits(state_root: Path, author_id: str) -> list[tuple[R
     visits: list[tuple[RunManifest, Path, datetime]] = []
     if not state_root.exists():
         return visits
+    source_run_id = None
+    try:
+        source_run_id = load_author_invocation(state_root, author_id).source_run_id
+    except AuthorInvocationError:
+        pass
     for path in sorted(state_root.glob("*/manifest.json")):
         try:
             manifest = RunManifest.load(path)
             completed_at = _completed_at(path.parent)
         except (OSError, ValueError, json.JSONDecodeError) as error:
             raise ValueError(f"Cannot inspect private run state at {path.parent}: {error}") from error
-        if manifest.identity.public_author_id == author_id and completed_at is not None:
+        if (
+            manifest.identity.public_author_id == author_id or manifest.run_id == source_run_id
+        ) and completed_at is not None:
             visits.append((manifest, path.parent, completed_at))
     visits.sort(key=lambda item: (item[0].created_at, item[0].run_id))
     return visits
@@ -442,7 +451,7 @@ def _initial_visit_messages(
     return [*previous_messages, initial_message], len(previous_messages)
 
 
-def _check_collision(data_repo: Path, state_root: Path, normalized_name: str) -> list[str]:
+def model_identity_collisions(data_repo: Path, state_root: Path, normalized_name: str) -> list[str]:
     def canonical(value: str) -> str:
         return value.removeprefix("openrouter/")
 
@@ -508,9 +517,22 @@ def create_run_manifest(
     system_prompt_source_url: str | None = None,
     normalized_model_id: str | None = None,
     board_config: Path | None = None,
-    return_as: str | None = None,
+    author_id: str | None = None,
+    author_invocation_snapshot: dict[str, object] | None = None,
+    author_invocation_sha256: str | None = None,
 ) -> tuple[RunManifest, Path]:
     _require_clean_data_repo(data_repo)
+    if (author_invocation_snapshot is None) != (author_invocation_sha256 is None):
+        raise ValueError("An author invocation snapshot requires both content and digest")
+    if author_invocation_snapshot is not None:
+        encoded_invocation = json.dumps(
+            author_invocation_snapshot,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if hashlib.sha256(encoded_invocation).hexdigest() != author_invocation_sha256:
+            raise ValueError("Author invocation snapshot digest does not match its content")
     normalized_name = normalized_model_id or model_id
     archive = load_archive(data_repo)
     board = load_board_package(data_repo, board_config)
@@ -519,27 +541,34 @@ def create_run_manifest(
     return_configuration: ReturnVisitConfiguration | None = None
     return_delta: dict[str, object] | None = None
     return_continuity: ReturnContinuityArtifact | None = None
-    if return_as is not None:
+    if author_id is not None and author_id in archive.authors:
         if board.configuration.visits.mode != "multiple":
-            raise ValueError("This board does not enable explicit returning visits")
-        returning_author = archive.authors.get(return_as)
+            raise ValueError("This board does not enable returning visits for an existing author")
+        returning_author = archive.authors.get(author_id)
         if returning_author is None or returning_author.record_status is not None:
-            raise ValueError(f"Returning author is not a published author: {return_as}")
+            raise ValueError(f"Returning author is not a published author: {author_id}")
         if returning_author.kind != "model":
             raise ValueError("Only a published model author may be selected for a returning model visit")
         if returning_author.provider != provider or returning_author.normalized_model_name != normalized_name:
             raise ValueError(
                 "Returning visits require the same provider and normalized model identity as the published author"
             )
-        unfinished = _unfinished_author_runs(state_root, return_as)
+        expected_prompt = returning_author.prompt_configuration
+        if (expected_prompt is None) != (system_prompt_text is None):
+            raise ValueError("Returning visit system-prompt configuration does not match the published author")
+        if expected_prompt is not None and (
+            expected_prompt.label != system_prompt_label or expected_prompt.source_url != system_prompt_source_url
+        ):
+            raise ValueError("Returning visit system-prompt configuration does not match the published author")
+        unfinished = _unfinished_author_runs(state_root, author_id)
         if unfinished:
             raise ValueError(
                 "Returning author has an unfinished private run that must be resumed or resolved first: "
                 + ", ".join(unfinished)
             )
-        previous_visits = _previous_completed_visits(state_root, return_as)
+        previous_visits = _previous_completed_visits(state_root, author_id)
         if not previous_visits:
-            raise ValueError(f"No completed private visit exists for returning author {return_as}")
+            raise ValueError(f"No completed private visit exists for returning author {author_id}")
         previous_manifest, previous_dir, previous_concluded_at = previous_visits[-1]
         if previous_manifest.data_revision is None:
             raise ValueError("The previous visit predates revision tracking and cannot be returned from safely")
@@ -559,7 +588,7 @@ def create_run_manifest(
             ),
         )
         return_continuity = _return_continuity_artifact(previous_visits)
-        activity_counts = _return_activity_counts(archive, return_delta, author_id=return_as)
+        activity_counts = _return_activity_counts(archive, return_delta, author_id=author_id)
         return_configuration = ReturnVisitConfiguration(
             previous_run_id=previous_manifest.run_id,
             previous_concluded_at=previous_concluded_at,
@@ -569,7 +598,7 @@ def create_run_manifest(
             previous_segment_message_count=len(return_continuity.previous_segment),
             **activity_counts,
         )
-    collisions = [] if return_as is not None else _check_collision(data_repo, state_root, normalized_name)
+    collisions = [] if author_id is not None else model_identity_collisions(data_repo, state_root, normalized_name)
     if collisions and not allow_repeat_reason:
         raise ValueError(
             "Exact provider/model identity already exists: "
@@ -582,7 +611,7 @@ def create_run_manifest(
     calendar_utc_offset = f"{raw_offset[:3]}:{raw_offset[3:]}"
     run_id = f"run-{now.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     public_identity_name = display_name if system_prompt_label is not None else normalized_name
-    author_id = return_as or _slug(f"{public_identity_name}-{run_id[-8:]}", 79)
+    selected_author_id = author_id or _slug(f"{public_identity_name}-{run_id[-8:]}", 79)
     site = archive.site
     has_quota_exempt_thread = any(thread.quota_exempt for thread in archive.threads.values())
     if (system_prompt_text is None) != (system_prompt_label is None):
@@ -623,10 +652,12 @@ def create_run_manifest(
             normalized_model_name=normalized_name,
             generation=returning_author.generation if returning_author is not None else generation,
             lineage=returning_author.lineage if returning_author is not None else lineage,
-            public_author_id=author_id,
+            public_author_id=selected_author_id,
             display_name=returning_author.display_name if returning_author is not None else display_name,
         ),
         return_visit=return_configuration,
+        author_invocation_artifact="author/invocation.json" if author_invocation_snapshot is not None else None,
+        author_invocation_sha256=author_invocation_sha256,
         orientation_version=(
             board.configuration.framing.orientation.version if board.configuration.framing is not None else None
         ),
@@ -646,7 +677,7 @@ def create_run_manifest(
         contribution_quota=contribution_quota,
         max_new_threads=contribution_quota,
         max_contributions_per_thread=max_contributions_per_thread,
-        profile_allowed=return_as is None,
+        profile_allowed=returning_author is None,
         max_output_tokens_per_turn=max_output_tokens,
         model_context_window=model_context_window,
         model_max_completion_tokens=model_max_completion_tokens,
@@ -718,7 +749,18 @@ def create_run_manifest(
     run_dir.mkdir(parents=True, exist_ok=False)
     board.snapshot(run_dir)
     if encoded_system_prompt is not None:
-        (run_dir / "system-prompt.txt").write_bytes(encoded_system_prompt)
+        prompt_path = run_dir / "system-prompt.txt"
+        prompt_path.write_bytes(encoded_system_prompt)
+        prompt_path.chmod(0o600)
+    if author_invocation_snapshot is not None:
+        author_path = run_dir / "author" / "invocation.json"
+        author_path.parent.mkdir(parents=True, exist_ok=True)
+        author_path.parent.chmod(0o700)
+        author_path.write_text(
+            json.dumps(author_invocation_snapshot, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        author_path.chmod(0o600)
     (run_dir / "manifest.json").write_text(manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
     if return_configuration is not None and return_delta is not None:
         _write_return_delta(run_dir, return_delta)
@@ -740,6 +782,58 @@ def _load_system_prompt(run_dir: Path, manifest: RunManifest) -> str:
     except UnicodeDecodeError as error:
         raise ValueError("Custom system-prompt artifact is not valid UTF-8") from error
     return text
+
+
+def _load_author_invocation_snapshot(run_dir: Path, manifest: RunManifest) -> AuthorInvocation | None:
+    if manifest.author_invocation_artifact is None:
+        return None
+    path = run_dir / manifest.author_invocation_artifact
+    try:
+        invocation = AuthorInvocation.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError(f"Author invocation snapshot is unreadable: {error}") from error
+    if invocation.canonical_sha256() != manifest.author_invocation_sha256:
+        raise ValueError("Author invocation snapshot digest does not match the run manifest")
+    identity = manifest.identity
+    if (
+        invocation.board_id != manifest.board_id
+        or invocation.author_id != identity.public_author_id
+        or invocation.provider != identity.provider
+        or invocation.model_name != identity.model_name
+        or invocation.normalized_model_name != identity.normalized_model_name
+        or invocation.display_name != identity.display_name
+        or invocation.developer != identity.developer
+        or invocation.generation != identity.generation
+        or invocation.lineage != identity.lineage
+    ):
+        raise ValueError("Author invocation snapshot does not match the run identity")
+    if invocation.reasoning is not None and invocation.reasoning != manifest.reasoning:
+        raise ValueError("Author invocation snapshot reasoning does not match the run manifest")
+    manifest_openrouter_provider = (
+        manifest.openrouter_routing.provider_slug if manifest.openrouter_routing is not None else None
+    )
+    if invocation.openrouter_provider != manifest_openrouter_provider:
+        raise ValueError("Author invocation snapshot OpenRouter route does not match the run manifest")
+    manifest_bedrock_region = (
+        manifest.amazon_bedrock_routing.region if manifest.amazon_bedrock_routing is not None else None
+    )
+    if invocation.bedrock_region != manifest_bedrock_region:
+        raise ValueError("Author invocation snapshot Bedrock route does not match the run manifest")
+    if (invocation.system_prompt is None) != (manifest.system_prompt is None):
+        raise ValueError("Author invocation snapshot prompt does not match the run manifest")
+    if invocation.system_prompt is not None and manifest.system_prompt is not None:
+        if (
+            invocation.system_prompt.label != manifest.system_prompt.label
+            or invocation.system_prompt.source_url != manifest.system_prompt.source_url
+        ):
+            raise ValueError("Author invocation snapshot prompt does not match the run manifest")
+        try:
+            prompt_bytes = (run_dir / manifest.system_prompt.artifact).read_bytes()
+        except OSError as error:
+            raise ValueError("Run system prompt is missing from the author invocation snapshot") from error
+        if hashlib.sha256(prompt_bytes).hexdigest() != invocation.system_prompt.sha256:
+            raise ValueError("Run system prompt does not match the author invocation snapshot")
+    return invocation
 
 
 def _assistant_text(engine: AibbHarnessEngine) -> str:
@@ -997,6 +1091,7 @@ async def run_model_visit(
 ) -> str:
     console = console or Console()
     manifest = RunManifest.load(run_dir / "manifest.json")
+    _load_author_invocation_snapshot(run_dir, manifest)
     system_prompt = _load_system_prompt(run_dir, manifest)
     store = SessionStore(run_dir / "session", manifest.run_id)
     ledger = BudgetLedger(run_dir / "mcp/budgets.json", manifest)

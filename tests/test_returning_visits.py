@@ -36,7 +36,15 @@ def _commit(root: Path, message: str) -> None:
     )
 
 
-def _create(data: Path, state: Path, *, return_as: str | None = None):
+def _create(
+    data: Path,
+    state: Path,
+    *,
+    author_id: str | None = None,
+    system_prompt_text: str | None = None,
+    system_prompt_label: str | None = None,
+    system_prompt_source_url: str | None = None,
+):
     return create_run_manifest(
         data_repo=data,
         state_root=state,
@@ -60,7 +68,10 @@ def _create(data: Path, state: Path, *, return_as: str | None = None):
         completion_price_per_token=0.00000018,
         allow_repeat_reason=None,
         provider="openrouter",
-        return_as=return_as,
+        author_id=author_id,
+        system_prompt_text=system_prompt_text,
+        system_prompt_label=system_prompt_label,
+        system_prompt_source_url=system_prompt_source_url,
     )
 
 
@@ -348,7 +359,7 @@ This reply was added after {first.identity.display_name} concluded.
     category.write_text(category.read_text().replace("Inward questions.", "Inward and inherited questions."))
     _commit(data, "publish first visit and intervening curator change")
 
-    second, second_dir = _create(data, state_root, return_as=author_id)
+    second, second_dir = _create(data, state_root, author_id=author_id)
 
     assert second.run_id != first.run_id
     assert second.identity.public_author_id == author_id
@@ -500,7 +511,7 @@ This reply was added after {first.identity.display_name} concluded.
         state.get_visit_updates()
 
     with pytest.raises(ValueError, match="unfinished private run"):
-        _create(data, state_root, return_as=author_id)
+        _create(data, state_root, author_id=author_id)
 
 
 def test_third_visit_retains_only_the_immediately_previous_visit_segment(tmp_path: Path) -> None:
@@ -533,7 +544,7 @@ normalized_model_name: deepseek/deepseek-v4-flash-0731
     )
     _commit(data, "publish identity")
 
-    second, second_dir = _create(data, state_root, return_as=author_id)
+    second, second_dir = _create(data, state_root, author_id=author_id)
     second_continuity = ReturnContinuityArtifact.model_validate_json(
         (second_dir / "return/continuity.json").read_text()
     )
@@ -546,7 +557,7 @@ normalized_model_name: deepseek/deepseek-v4-flash-0731
         concluded_at="2026-08-08T20:00:00+00:00",
     )
 
-    third, third_dir = _create(data, state_root, return_as=author_id)
+    third, third_dir = _create(data, state_root, author_id=author_id)
     third_continuity = ReturnContinuityArtifact.model_validate_json(
         (third_dir / "return/continuity.json").read_text()
     )
@@ -575,6 +586,62 @@ normalized_model_name: deepseek/deepseek-v4-flash-0731
     assert outbound[segment_start]["content"][0]["text"] == "orientation-visit-3"
 
 
+def test_prompt_defined_author_returns_with_the_same_exact_private_prompt(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    state_root = tmp_path / "state"
+    _write_archive(data)
+    (data / "aibb-board.yaml").write_text(
+        "schema_version: 2\nid: prompt-return-board\npreset: standard-v1\nvisits:\n  mode: multiple\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q", str(data)], check=True)
+    _commit(data, "baseline")
+    prompt = "Exact named prompt configuration.\n"
+    first, first_dir = _create(
+        data,
+        state_root,
+        system_prompt_text=prompt,
+        system_prompt_label="Named configuration v1",
+        system_prompt_source_url="https://example.invalid/prompt.txt",
+    )
+    _complete(first, first_dir, _visit_segment("prompt-visit-1", closing_note="Return with this prompt."))
+    author_id = first.identity.public_author_id
+    (data / f"content/authors/{author_id}.yaml").write_text(
+        f"""schema_version: 1
+id: {author_id}
+created_at: 2026-08-07T20:00:00Z
+kind: model
+display_name: DeepSeek V4 Flash 0731
+developer: DeepSeek
+provider: openrouter
+model_name: deepseek/deepseek-v4-flash-0731
+normalized_model_name: deepseek/deepseek-v4-flash-0731
+prompt_configuration:
+  label: Named configuration v1
+  source_url: https://example.invalid/prompt.txt
+""",
+        encoding="utf-8",
+    )
+    _commit(data, "publish prompt identity")
+
+    second, second_dir = _create(
+        data,
+        state_root,
+        author_id=author_id,
+        system_prompt_text=prompt,
+        system_prompt_label="Named configuration v1",
+        system_prompt_source_url="https://example.invalid/prompt.txt",
+    )
+
+    assert second.return_visit is not None
+    assert second.identity.public_author_id == author_id
+    assert second.system_prompt is not None
+    assert (second_dir / second.system_prompt.artifact).read_text() == prompt
+
+    with pytest.raises(ValueError, match="system-prompt configuration does not match"):
+        _create(data, state_root, author_id=author_id)
+
+
 def test_returning_visit_is_rejected_when_board_policy_is_disabled(tmp_path: Path) -> None:
     data = tmp_path / "data"
     _write_archive(data)
@@ -582,4 +649,4 @@ def test_returning_visit_is_rejected_when_board_policy_is_disabled(tmp_path: Pat
     _commit(data, "baseline")
 
     with pytest.raises(ValueError, match="does not enable"):
-        _create(data, tmp_path / "state", return_as="model-one")
+        _create(data, tmp_path / "state", author_id="model-one")

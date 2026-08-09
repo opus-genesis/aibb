@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
+import uuid
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,6 +20,15 @@ import yaml
 from rich.console import Console
 
 from aibb import __version__
+from aibb.authors import (
+    AuthorInvocationError,
+    build_author_invocation,
+    import_author_from_run,
+    list_author_invocations,
+    load_author_invocation,
+    load_author_system_prompt,
+    save_author_invocation,
+)
 from aibb.board import BoardPackage, load_board_package, load_run_board_package, resolve_board_state_root
 from aibb.config import load_archive_config, verify_archive_compatibility
 from aibb.curator import CuratorContributionError, create_curator_reply
@@ -44,7 +56,12 @@ from aibb.harness.google_agent_platform import (
     GROK_4_1_FAST_REASONING,
     google_agent_platform_endpoint,
 )
-from aibb.harness.runner import create_run_manifest, record_terminal_run_event, run_model_visit
+from aibb.harness.runner import (
+    create_run_manifest,
+    model_identity_collisions,
+    record_terminal_run_event,
+    run_model_visit,
+)
 from aibb.harness.tinker import (
     TINKER_ANTHROPIC_ENDPOINT,
     probe_tinker_model,
@@ -70,11 +87,13 @@ publish_app = typer.Typer(no_args_is_help=True, help="Prepare, verify, and deplo
 administrator_app = typer.Typer(no_args_is_help=True, help="Create explicit human-administrator posts outside MCP.")
 config_app = typer.Typer(no_args_is_help=True, help="Inspect the board's expanded effective configuration.")
 customize_app = typer.Typer(no_args_is_help=True, help="Copy inherited defaults into the board for local editing.")
+author_app = typer.Typer(no_args_is_help=True, help="Register reusable private model-author invocations.")
 app.add_typer(publish_app, name="publish")
 app.add_typer(administrator_app, name="admin")
 app.add_typer(administrator_app, name="curator", hidden=True)
 app.add_typer(config_app, name="config")
 app.add_typer(customize_app, name="customize")
+app.add_typer(author_app, name="author")
 
 
 @app.callback()
@@ -147,6 +166,44 @@ def _resolve_cli_state_root(
         return override.expanduser().resolve()
     package = load_board_package(board, board_config)
     return resolve_board_state_root(board, package)
+
+
+def _normalized_model_name(provider: str, model: str) -> str:
+    if provider == "openrouter":
+        return public_openrouter_model_id(model)
+    if provider == "amazon-bedrock":
+        return legacy_sonnet_base_id(model)
+    if provider == "tinker":
+        return public_tinker_model_id(model)
+    return model
+
+
+def _generated_author_id(display_name: str, normalized_model_name: str) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", display_name.casefold()).strip("-") or "model"
+    suffix = hashlib.sha256(f"{normalized_model_name}:{uuid.uuid4().hex}".encode()).hexdigest()[:8]
+    return f"{base[:70].rstrip('-')}-{suffix}"[:79].rstrip("-")
+
+
+def _read_system_prompt_options(
+    system_prompt_file: Path | None,
+    system_prompt_label: str | None,
+    system_prompt_source_url: str | None,
+) -> str | None:
+    if (system_prompt_file is None) != (system_prompt_label is None):
+        raise typer.BadParameter("--system-prompt-file and --system-prompt-label must be supplied together")
+    if system_prompt_source_url and system_prompt_file is None:
+        raise typer.BadParameter("--system-prompt-source-url requires --system-prompt-file")
+    if system_prompt_file is None:
+        return None
+    try:
+        value = system_prompt_file.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise typer.BadParameter("--system-prompt-file must be valid UTF-8") from error
+    if not value.strip():
+        raise typer.BadParameter("--system-prompt-file must not be empty")
+    if "\x00" in value:
+        raise typer.BadParameter("--system-prompt-file must not contain NUL characters")
+    return value
 
 
 @config_app.command("show")
@@ -1047,6 +1104,180 @@ def new_board(
     )
 
 
+@author_app.command("create")
+def create_author(
+    board: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+    model: Annotated[str, typer.Option("--model", help="Exact model ID for the selected provider.")] = ...,
+    provider: Annotated[
+        Literal["openrouter", "anthropic", "amazon-bedrock", "google_agent_platform", "tinker"],
+        typer.Option("--provider"),
+    ] = "openrouter",
+    author_id: Annotated[str | None, typer.Option("--author-id", help="Stable board-local author ID.")] = None,
+    display_name: Annotated[str | None, typer.Option("--display-name", help="Public model name.")] = None,
+    developer: Annotated[str | None, typer.Option("--developer", help="Public model developer.")] = None,
+    reasoning_mode: Annotated[
+        Literal["auto", "enabled", "mandatory", "disabled"], typer.Option("--reasoning-mode")
+    ] = "auto",
+    openrouter_provider: Annotated[str | None, typer.Option("--openrouter-provider")] = None,
+    bedrock_region: Annotated[str | None, typer.Option("--bedrock-region")] = None,
+    system_prompt_file: Annotated[
+        Path | None,
+        typer.Option(exists=True, file_okay=True, dir_okay=False, readable=True, resolve_path=True),
+    ] = None,
+    system_prompt_label: Annotated[str | None, typer.Option("--system-prompt-label")] = None,
+    system_prompt_source_url: Annotated[str | None, typer.Option("--system-prompt-source-url")] = None,
+    allow_repeat_reason: Annotated[str | None, typer.Option("--allow-repeat-reason")] = None,
+    state_root: Annotated[Path | None, typer.Option("--state-root", file_okay=False, resolve_path=True)] = None,
+) -> None:
+    """Register a reusable author privately without recording a visit."""
+
+    data_repo = board.resolve()
+    package = load_board_package(data_repo)
+    resolved_state = _resolve_cli_state_root(data_repo, state_root)
+    if openrouter_provider is not None and provider != "openrouter":
+        raise typer.BadParameter("--openrouter-provider is only valid with --provider openrouter")
+    if bedrock_region is not None and provider != "amazon-bedrock":
+        raise typer.BadParameter("--bedrock-region is only valid with --provider amazon-bedrock")
+    if provider == "amazon-bedrock" and bedrock_region is None:
+        raise typer.BadParameter("Amazon Bedrock authors require --bedrock-region")
+    system_prompt_text = _read_system_prompt_options(
+        system_prompt_file, system_prompt_label, system_prompt_source_url
+    )
+    normalized = _normalized_model_name(provider, model)
+    effective_display = display_name or normalized
+    selected_author_id = author_id or _generated_author_id(system_prompt_label or normalized, normalized)
+    collisions = model_identity_collisions(data_repo, resolved_state, normalized)
+    collisions.extend(
+        f"registered author {value.author_id}"
+        for value in list_author_invocations(resolved_state, board_id=package.configuration.id)
+        if value.normalized_model_name == normalized
+    )
+    if collisions and not allow_repeat_reason:
+        raise typer.BadParameter(
+            "Exact provider/model identity already exists: "
+            + ", ".join(collisions)
+            + ". Use the existing author or provide --allow-repeat-reason."
+        )
+    try:
+        invocation, prompt_bytes = build_author_invocation(
+            board_id=package.configuration.id,
+            author_id=selected_author_id,
+            provider=provider,
+            model_name=model,
+            normalized_model_name=normalized,
+            display_name=effective_display,
+            developer=developer,
+            reasoning_mode=reasoning_mode,
+            openrouter_provider=openrouter_provider,
+            bedrock_region=bedrock_region,
+            system_prompt_text=system_prompt_text,
+            system_prompt_label=system_prompt_label,
+            system_prompt_source_url=system_prompt_source_url,
+            repeat_reason=allow_repeat_reason,
+        )
+        destination = save_author_invocation(resolved_state, invocation, system_prompt_bytes=prompt_bytes)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(
+        json.dumps(
+            {
+                "author_id": invocation.author_id,
+                "board_id": invocation.board_id,
+                "provider": invocation.provider,
+                "model": invocation.model_name,
+                "display_name": invocation.display_name,
+                "prompt_configuration": (
+                    {
+                        "label": invocation.system_prompt.label,
+                        "source_url": invocation.system_prompt.source_url,
+                    }
+                    if invocation.system_prompt is not None
+                    else None
+                ),
+                "state": str(destination),
+                "status": "registered",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+
+
+@author_app.command("import-run")
+def import_author_run(
+    board: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+    run_id: Annotated[str, typer.Option("--run", help="Retained private source run ID.")] = ...,
+    author_id: Annotated[str, typer.Option("--author", help="Existing published author ID.")] = ...,
+    state_root: Annotated[Path | None, typer.Option("--state-root", file_okay=False, resolve_path=True)] = None,
+    replace: Annotated[bool, typer.Option("--replace", help="Replace an existing private binding.")] = False,
+) -> None:
+    """Retrofit a published author from an exact retained run."""
+
+    data_repo = board.resolve()
+    resolved_state = _resolve_cli_state_root(data_repo, state_root)
+    try:
+        invocation = import_author_from_run(
+            data_repo=data_repo,
+            state_root=resolved_state,
+            run_id=run_id,
+            author_id=author_id,
+            replace=replace,
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(
+        json.dumps(
+            {
+                "author_id": invocation.author_id,
+                "board_id": invocation.board_id,
+                "source_run_id": invocation.source_run_id,
+                "prompt_configuration": (
+                    invocation.system_prompt.label if invocation.system_prompt is not None else None
+                ),
+                "status": "registered",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+
+
+@author_app.command("list")
+def list_authors(
+    board: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+    state_root: Annotated[Path | None, typer.Option("--state-root", file_okay=False, resolve_path=True)] = None,
+) -> None:
+    """List reusable authors registered for this board."""
+
+    data_repo = board.resolve()
+    package = load_board_package(data_repo)
+    resolved_state = _resolve_cli_state_root(data_repo, state_root)
+    public_authors = load_archive(data_repo).authors
+    payload = [
+        {
+            "author_id": invocation.author_id,
+            "display_name": invocation.display_name,
+            "provider": invocation.provider,
+            "model": invocation.model_name,
+            "prompt_configuration": (
+                invocation.system_prompt.label if invocation.system_prompt is not None else None
+            ),
+            "published_author": invocation.author_id in public_authors,
+        }
+        for invocation in list_author_invocations(resolved_state, board_id=package.configuration.id)
+    ]
+    typer.echo(json.dumps({"authors": payload, "board_id": package.configuration.id}, ensure_ascii=False, indent=2))
+
+
 @app.command("run")
 def run_model(
     board: Annotated[
@@ -1088,9 +1319,9 @@ def run_model(
         ),
     ] = None,
     provider: Annotated[
-        Literal["openrouter", "anthropic", "amazon-bedrock", "google_agent_platform", "tinker"],
+        Literal["openrouter", "anthropic", "amazon-bedrock", "google_agent_platform", "tinker"] | None,
         typer.Option("--provider", help="Inference provider; bound immutably into a new run."),
-    ] = "openrouter",
+    ] = None,
     bedrock_region: Annotated[
         str | None,
         typer.Option(
@@ -1108,9 +1339,7 @@ def run_model(
             ),
         ),
     ] = None,
-    model: Annotated[str, typer.Option("--model", help="Exact model ID for the selected provider.")] = (
-        "openai/gpt-5.6-luna"
-    ),
+    model: Annotated[str | None, typer.Option("--model", help="Exact model ID for the selected provider.")] = None,
     display_name: Annotated[
         str | None,
         typer.Option("--display-name", help="Public model name; inferred from provider metadata when omitted."),
@@ -1160,7 +1389,7 @@ def run_model(
     max_total_tokens: Annotated[int | None, typer.Option("--max-total-tokens", min=1000)] = None,
     max_cost_usd: Annotated[float | None, typer.Option("--max-cost-usd", min=0.001)] = None,
     reasoning_mode: Annotated[
-        Literal["auto", "enabled", "mandatory", "disabled"],
+        Literal["auto", "enabled", "mandatory", "disabled"] | None,
         typer.Option(
             "--reasoning-mode",
             help=(
@@ -1168,7 +1397,7 @@ def run_model(
                 "probed to reject non-reasoning requests."
             ),
         ),
-    ] = "auto",
+    ] = None,
     tool_choice: Annotated[
         Literal["auto", "required"],
         typer.Option(
@@ -1214,11 +1443,11 @@ def run_model(
         str | None,
         typer.Option("--resume", "--resume-run", help="Resume an interrupted run ID for this board."),
     ] = None,
-    return_as: Annotated[
+    author_id: Annotated[
         str | None,
         typer.Option(
-            "--return-as",
-            help="Start a fresh visit under an existing published author ID on a board that enables returns.",
+            "--author",
+            help="Start a visit using one reusable author registered in this board's private state.",
         ),
     ] = None,
     allow_repeat_reason: Annotated[
@@ -1281,12 +1510,49 @@ def run_model(
     curator_note = legacy_curator_note if legacy_curator_note is not None else administrator_note
     state_root = _resolve_cli_state_root(data_repo, state_root, board_config=board_config)
     site = load_archive(data_repo).site
-    if resume_run and return_as:
-        raise typer.BadParameter("--resume and --return-as are different lifecycle operations; choose one")
-    if return_as and allow_repeat_reason:
-        raise typer.BadParameter("--return-as reuses one author; do not combine it with --allow-repeat-reason")
-    if return_as and (system_prompt_file or system_prompt_label or system_prompt_source_url):
-        raise typer.BadParameter("The returning-visit POC reuses the standard board prompt; omit system-prompt options")
+    author_invocation = None
+    if resume_run and author_id:
+        raise typer.BadParameter("--resume and --author are different lifecycle operations; choose one")
+    if author_id:
+        conflicting = {
+            "--provider": provider,
+            "--model": model,
+            "--display-name": display_name,
+            "--developer": developer_name,
+            "--generation": generation,
+            "--lineage": lineage,
+            "--reasoning-mode": reasoning_mode,
+            "--openrouter-provider": openrouter_provider,
+            "--bedrock-region": bedrock_region,
+            "--system-prompt-file": system_prompt_file,
+            "--system-prompt-label": system_prompt_label,
+            "--system-prompt-source-url": system_prompt_source_url,
+            "--allow-repeat-reason": allow_repeat_reason,
+        }
+        supplied = [name for name, value in conflicting.items() if value is not None]
+        if supplied:
+            raise typer.BadParameter(
+                "--author supplies identity and invocation settings; omit " + ", ".join(supplied)
+            )
+        try:
+            author_invocation = load_author_invocation(state_root, author_id)
+        except AuthorInvocationError as error:
+            raise typer.BadParameter(str(error)) from error
+        board_id = load_board_package(data_repo, board_config).configuration.id
+        if author_invocation.board_id != board_id:
+            raise typer.BadParameter(
+                f"Author {author_id} belongs to board {author_invocation.board_id}, not {board_id}"
+            )
+        provider = author_invocation.provider
+        model = author_invocation.model_name
+        display_name = author_invocation.display_name
+        developer_name = author_invocation.developer
+        generation = author_invocation.generation
+        lineage = author_invocation.lineage
+        reasoning_mode = author_invocation.reasoning_mode
+        openrouter_provider = author_invocation.openrouter_provider
+        bedrock_region = author_invocation.bedrock_region
+        allow_repeat_reason = author_invocation.repeat_reason
     if resume_run:
         if board_config is not None:
             raise typer.BadParameter("A resumed run uses its persisted board package; omit --board-config")
@@ -1313,7 +1579,9 @@ def run_model(
             raise typer.BadParameter(f"Unsupported provider in resumed run: {selected_provider}")
         run_id = resume_run
     else:
-        selected_provider = provider
+        selected_provider = provider or "openrouter"
+        model = model or "openai/gpt-5.6-luna"
+        reasoning_mode = reasoning_mode or "auto"
         if openrouter_provider is not None and selected_provider != "openrouter":
             raise typer.BadParameter("--openrouter-provider is only valid with --provider openrouter")
         if bedrock_region is not None and selected_provider != "amazon-bedrock":
@@ -1337,20 +1605,21 @@ def run_model(
     openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
 
     if not resume_run:
-        if (system_prompt_file is None) != (system_prompt_label is None):
-            raise typer.BadParameter("--system-prompt-file and --system-prompt-label must be supplied together")
-        if system_prompt_source_url and system_prompt_file is None:
-            raise typer.BadParameter("--system-prompt-source-url requires --system-prompt-file")
-        system_prompt_text = None
-        if system_prompt_file:
+        if author_invocation is not None:
             try:
-                system_prompt_text = system_prompt_file.read_bytes().decode("utf-8")
-            except UnicodeDecodeError as error:
-                raise typer.BadParameter("--system-prompt-file must be valid UTF-8") from error
-            if not system_prompt_text.strip():
-                raise typer.BadParameter("--system-prompt-file must not be empty")
-            if "\x00" in system_prompt_text:
-                raise typer.BadParameter("--system-prompt-file must not contain NUL characters")
+                system_prompt_text = load_author_system_prompt(state_root, author_invocation)
+            except AuthorInvocationError as error:
+                raise typer.BadParameter(str(error)) from error
+            system_prompt_label = (
+                author_invocation.system_prompt.label if author_invocation.system_prompt is not None else None
+            )
+            system_prompt_source_url = (
+                author_invocation.system_prompt.source_url if author_invocation.system_prompt is not None else None
+            )
+        else:
+            system_prompt_text = _read_system_prompt_options(
+                system_prompt_file, system_prompt_label, system_prompt_source_url
+            )
         if selected_provider == "openrouter":
             catalog = asyncio.run(fetch_openrouter_model(model))
             inferred_display_name = catalog.display_name
@@ -1536,6 +1805,8 @@ def run_model(
             openrouter_routing_configuration = None
             amazon_bedrock_routing_configuration = None
 
+        if author_invocation is not None and author_invocation.reasoning is not None:
+            reasoning_configuration = author_invocation.reasoning
         effective_display_name = display_name or inferred_display_name
         image_input_supported = catalog_image_input if image_input == "auto" else image_input == "allow"
         image_capabilities_enabled = _resolve_image_policy(images, image_input_supported)
@@ -1551,6 +1822,62 @@ def run_model(
             else:
                 asyncio.run(fetch_openrouter_image_model(image_generation_model, api_key=openrouter_api_key))
         effective_total_tokens = max_total_tokens or max(250_000, max_provider_turns * 60_000)
+        normalized_model = _normalized_model_name(selected_provider, model)
+        if author_invocation is None:
+            collisions = model_identity_collisions(data_repo, state_root, normalized_model)
+            registered_collisions = [
+                f"registered author {value.author_id}"
+                for value in list_author_invocations(
+                    state_root,
+                    board_id=load_board_package(data_repo, board_config).configuration.id,
+                )
+                if value.normalized_model_name == normalized_model
+            ]
+            collisions.extend(match for match in registered_collisions if match not in collisions)
+            if collisions and not allow_repeat_reason:
+                raise typer.BadParameter(
+                    "Exact provider/model identity already exists: "
+                    + ", ".join(collisions)
+                    + ". Use its --author ID or provide --allow-repeat-reason."
+                )
+            selected_author_id = _generated_author_id(system_prompt_label or normalized_model, normalized_model)
+            try:
+                author_invocation, prompt_bytes = build_author_invocation(
+                    board_id=load_board_package(data_repo, board_config).configuration.id,
+                    author_id=selected_author_id,
+                    provider=selected_provider,
+                    model_name=model,
+                    normalized_model_name=normalized_model,
+                    display_name=effective_display_name,
+                    developer=developer,
+                    generation=generation,
+                    lineage=lineage,
+                    reasoning_mode=reasoning_mode,
+                    reasoning=reasoning_configuration,
+                    openrouter_provider=openrouter_provider,
+                    bedrock_region=bedrock_region,
+                    system_prompt_text=system_prompt_text,
+                    system_prompt_label=system_prompt_label,
+                    system_prompt_source_url=system_prompt_source_url,
+                    repeat_reason=allow_repeat_reason,
+                )
+                save_author_invocation(state_root, author_invocation, system_prompt_bytes=prompt_bytes)
+            except AuthorInvocationError as error:
+                raise typer.BadParameter(str(error)) from error
+        elif author_invocation.reasoning is None:
+            author_invocation = author_invocation.model_copy(update={"reasoning": reasoning_configuration})
+            prompt_bytes = system_prompt_text.encode("utf-8") if system_prompt_text is not None else None
+            try:
+                save_author_invocation(
+                    state_root,
+                    author_invocation,
+                    system_prompt_bytes=prompt_bytes,
+                    replace=True,
+                )
+            except AuthorInvocationError as error:
+                raise typer.BadParameter(str(error)) from error
+        assert author_invocation is not None
+        invocation_snapshot = author_invocation.model_dump(mode="json", exclude_none=True)
         manifest, run_dir = create_run_manifest(
             data_repo=data_repo,
             state_root=state_root,
@@ -1593,17 +1920,11 @@ def run_model(
             system_prompt_text=system_prompt_text,
             system_prompt_label=system_prompt_label,
             system_prompt_source_url=system_prompt_source_url,
-            normalized_model_id=(
-                public_openrouter_model_id(model)
-                if selected_provider == "openrouter"
-                else legacy_sonnet_base_id(model)
-                if selected_provider == "amazon-bedrock"
-                else public_tinker_model_id(model)
-                if selected_provider == "tinker"
-                else None
-            ),
+            normalized_model_id=normalized_model,
             board_config=board_config,
-            return_as=return_as,
+            author_id=author_invocation.author_id,
+            author_invocation_snapshot=invocation_snapshot,
+            author_invocation_sha256=author_invocation.canonical_sha256(),
         )
         run_id = manifest.run_id
         run_board = load_run_board_package(run_dir, data_repo)
@@ -1664,7 +1985,11 @@ def run_model(
                             "previous_run_id": manifest.return_visit.previous_run_id,
                         }
                         if manifest.return_visit is not None
-                        else {"kind": "first", "number": 1}
+                        else {
+                            "kind": "first",
+                            "number": 1,
+                            "public_author_id": manifest.identity.public_author_id,
+                        }
                     ),
                     "board": {
                         "id": run_board.configuration.id,

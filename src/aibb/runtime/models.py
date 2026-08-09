@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
@@ -102,6 +104,66 @@ class SystemPromptConfiguration(BaseModel):
     artifact: Literal["system-prompt.txt"] = "system-prompt.txt"
 
 
+class StoredSystemPromptConfiguration(BaseModel):
+    """Exact private prompt artifact bound to a reusable author."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=160)
+    source_url: str | None = Field(default=None, pattern=r"^https://", max_length=2048)
+    chars: int = Field(ge=1)
+    bytes: int = Field(ge=1)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    artifact: Literal["system-prompt.txt"] = "system-prompt.txt"
+
+
+class AuthorInvocation(BaseModel):
+    """Private reusable binding from one board author to an inference route."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    board_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
+    author_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
+    created_at: datetime
+    provider: Literal["openrouter", "anthropic", "amazon-bedrock", "google_agent_platform", "tinker"]
+    model_name: str = Field(min_length=1, max_length=240)
+    normalized_model_name: str = Field(min_length=1, max_length=240)
+    display_name: str = Field(min_length=1, max_length=160)
+    developer: str | None = Field(default=None, min_length=1, max_length=120)
+    generation: str | None = Field(default=None, max_length=120)
+    lineage: str | None = Field(default=None, max_length=120)
+    reasoning_mode: Literal["auto", "enabled", "mandatory", "disabled"] = "auto"
+    reasoning: ReasoningConfiguration | None = None
+    openrouter_provider: str | None = Field(default=None, min_length=1, max_length=120)
+    bedrock_region: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{2,31}$")
+    system_prompt: StoredSystemPromptConfiguration | None = None
+    source_run_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{3,99}$")
+    repeat_reason: str | None = Field(default=None, min_length=1, max_length=1000)
+
+    @field_validator("created_at")
+    @classmethod
+    def require_created_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("author invocation timestamps must include a timezone")
+        return value
+
+    @model_validator(mode="after")
+    def route_options_match_provider(self) -> AuthorInvocation:
+        if self.openrouter_provider is not None and self.provider != "openrouter":
+            raise ValueError("openrouter_provider is only valid for OpenRouter authors")
+        if self.bedrock_region is not None and self.provider != "amazon-bedrock":
+            raise ValueError("bedrock_region is only valid for Amazon Bedrock authors")
+        if self.provider == "amazon-bedrock" and self.bedrock_region is None:
+            raise ValueError("Amazon Bedrock authors require a region")
+        return self
+
+    def canonical_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude_none=True)
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+
 class ReturnVisitConfiguration(BaseModel):
     """Private binding between a fresh visit and one completed public identity."""
 
@@ -143,6 +205,8 @@ class RunManifest(BaseModel):
     board_package_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     data_revision: str | None = Field(default=None, pattern=r"^[a-f0-9]{40,64}$")
     identity: BoundModelIdentity
+    author_invocation_artifact: Literal["author/invocation.json"] | None = None
+    author_invocation_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     return_visit: ReturnVisitConfiguration | None = None
     orientation_version: str | None = None
     notice_version: str | None = None
@@ -239,6 +303,8 @@ class RunManifest(BaseModel):
             raise ValueError("a returning visit requires a bound data revision")
         if self.return_visit is not None and self.profile_allowed:
             raise ValueError("a returning visit keeps the existing public profile read-only")
+        if (self.author_invocation_artifact is None) != (self.author_invocation_sha256 is None):
+            raise ValueError("an author invocation snapshot requires both artifact and digest")
         return self
 
     @classmethod

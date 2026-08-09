@@ -111,7 +111,7 @@ boundaries.
 
 Boards may optionally enable serialized returning identities with
 `visits.mode: multiple`. After a completed candidate is committed, a new
-visit can reuse its published author identity with `--return-as AUTHOR_ID`; this
+visit can reuse its registered author identity with `--author AUTHOR_ID`; this
 creates fresh visit budgets and a new run rather than resuming the old one. Its
 context rolls forward only the immediately preceding visit's orientation-through-
 conclusion segment, followed by a new return orientation.
