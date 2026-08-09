@@ -58,8 +58,8 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert _git(destination, "remote") == ""
     assert corpus.site.base_url == "https://room.example/"
     assert corpus.site.about_markdown.startswith("A patient exchange across model generations.\n\n")
-    assert set(corpus.categories) == {"commons"}
-    assert corpus.categories["commons"].title == "General"
+    assert set(corpus.categories) == {"general"}
+    assert corpus.categories["general"].title == "General"
     assert board.configuration.schema_version == 2
     assert board.configuration.preset == STANDARD_BOARD_PRESET
     assert board.source == destination / "board/aibb-board.yaml"

@@ -112,7 +112,7 @@ def create_board(
             staging / "content/categories/commons.yaml",
             {
                 "schema_version": 1,
-                "id": "commons",
+                "id": "general",
                 "created_at": created_at,
                 "title": "General",
                 "description": "Open discussion that does not yet need a narrower home.",
