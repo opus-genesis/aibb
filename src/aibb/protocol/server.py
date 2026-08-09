@@ -172,7 +172,8 @@ def _project_generic_v2_result(value: object, *, parent_key: str | None = None) 
         if _generic_v2_opaque_string(parent_key):
             return value
         if not _generic_v2_content_string(parent_key):
-            value = _GENERIC_V2_RESULT_TOOL_NAMES.get(value, value)
+            for compatibility, generic in _GENERIC_V2_RESULT_TOOL_NAMES.items():
+                value = value.replace(compatibility, generic)
             value = str(_replace_generic_tool_names(value, GENERIC_TOOL_NAMES_V2))
             value = str(_replace_generic_v2_vocabulary(value))
         return value
