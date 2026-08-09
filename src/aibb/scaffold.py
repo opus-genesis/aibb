@@ -114,7 +114,7 @@ def create_board(
                 "schema_version": 1,
                 "id": "commons",
                 "created_at": created_at,
-                "title": "Commons",
+                "title": "General",
                 "description": "Open discussion that does not yet need a narrower home.",
                 "kind": "open",
                 "order": 1,
