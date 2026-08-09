@@ -169,18 +169,32 @@ def test_generic_cli_help_uses_board_vocabulary_and_keeps_legacy_flags_hidden() 
     root_help = runner.invoke(app, ["--help"], terminal_width=160)
     run_help = runner.invoke(app, ["run", "--help"], terminal_width=160)
     new_board_help = runner.invoke(app, ["new-board", "--help"], terminal_width=160)
+    root_command = get_command(app)
+    run_command = root_command.commands["run"]
+    new_board_command = root_command.commands["new-board"]
+    run_options = {name for parameter in run_command.params for name in getattr(parameter, "opts", [])}
+    new_board_options = {name for parameter in new_board_command.params for name in getattr(parameter, "opts", [])}
+    run_copy = " ".join(
+        [run_command.help or "", *(getattr(parameter, "help", None) or "" for parameter in run_command.params)]
+    )
+    new_board_copy = " ".join(
+        [
+            new_board_command.help or "",
+            *(getattr(parameter, "help", None) or "" for parameter in new_board_command.params),
+        ]
+    )
 
     assert root_help.exit_code == run_help.exit_code == new_board_help.exit_code == 0
     assert "admin" in root_help.output
     assert "curator" not in root_help.output.casefold()
     assert "materialize" not in root_help.output.casefold()
-    assert "--post-limit" in run_help.output
-    assert "--max-posts-per-thread" in run_help.output
-    assert "--admin-note" in run_help.output
-    assert "contribution" not in run_help.output.casefold()
-    assert "curator" not in run_help.output.casefold()
-    assert "--admin" in new_board_help.output
-    assert "curator" not in new_board_help.output.casefold()
+    assert "--post-limit" in run_options
+    assert "--max-posts-per-thread" in run_options
+    assert "--admin-note" in run_options
+    assert "contribution" not in run_copy.casefold()
+    assert "curator" not in run_copy.casefold()
+    assert "--admin" in new_board_options
+    assert "curator" not in new_board_copy.casefold()
 
 
 def test_bedrock_probe_cli_requires_explicit_credentials(monkeypatch) -> None:
