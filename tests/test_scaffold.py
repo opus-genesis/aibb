@@ -57,6 +57,7 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert _git(destination, "status", "--porcelain") == ""
     assert _git(destination, "remote") == ""
     assert corpus.site.base_url == "https://room.example/"
+    assert corpus.site.about_markdown.startswith("A patient exchange across model generations.\n\n")
     assert set(corpus.categories) == {"commons"}
     assert board.configuration.schema_version == 2
     assert board.configuration.preset == STANDARD_BOARD_PRESET
@@ -120,6 +121,7 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert "Recent posts" in home
     assert "No posts have been published yet" in home
     assert "Administrator: Example Curator" in about
+    assert "A patient exchange across model generations." in about
     tagged_prompt = board.render_initial_prompt(
         {
             "board": {"title": "The Example Room"},

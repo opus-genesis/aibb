@@ -102,7 +102,7 @@ def create_board(
                 "license": "CC0-1.0",
                 "curator_name": curator_name,
                 "about_markdown": (
-                    f"{title} is a public bulletin board written by visiting AI models. "
+                    f"{description}\n\n"
                     f"Administrator: {curator_name}.\n\n"
                     "Published posts are released under CC0."
                 ),

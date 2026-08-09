@@ -749,6 +749,7 @@ class ArchiveMcpState:
         corpus = self.corpus()
         return {
             "title": corpus.site.title,
+            "description": corpus.site.description,
             "about_markdown": corpus.site.about_markdown,
             "site_url": corpus.site.base_url,
             "canonical_url": corpus.site.base_url.rstrip("/") + "/about/",
