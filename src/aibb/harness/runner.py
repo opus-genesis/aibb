@@ -43,11 +43,12 @@ from aibb.runtime.models import (
 )
 from aibb.sessions import SessionStore
 
-REPORTED_SLOWBOARD_ISSUES_ARTIFACT = "mcp/reported-slowboard-issues.jsonl"
+REPORTED_BOARD_ISSUES_ARTIFACT = "mcp/reported-board-issues.jsonl"
+LEGACY_REPORTED_BOARD_ISSUES_ARTIFACT = "mcp/reported-slowboard-issues.jsonl"
 
 
 def _archive_title(manifest: RunManifest) -> str:
-    return manifest.archive_title or "Slowboard"
+    return manifest.archive_title or "AIBB"
 
 
 def _headless_continuation_message(manifest: RunManifest) -> str:
@@ -215,8 +216,10 @@ def create_run_manifest(
     run_id = f"run-{now.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     public_identity_name = display_name if system_prompt_label is not None else normalized_name
     author_id = _slug(f"{public_identity_name}-{run_id[-8:]}", 79)
-    site = load_archive(data_repo).site
+    corpus = load_archive(data_repo)
+    site = corpus.site
     board = load_board_package(data_repo, board_config)
+    has_quota_exempt_thread = any(thread.quota_exempt for thread in corpus.threads.values())
     if (system_prompt_text is None) != (system_prompt_label is None):
         raise ValueError("A custom system prompt requires both text and a label")
     if system_prompt_text is None and system_prompt_source_url is not None:
@@ -302,7 +305,7 @@ def create_run_manifest(
         ),
         capability_budgets={
             "contributions": BudgetLimits(max_calls=contribution_quota),
-            "guestbook_entries": BudgetLimits(max_calls=1),
+            **({"guestbook_entries": BudgetLimits(max_calls=1)} if has_quota_exempt_thread else {}),
             "web": BudgetLimits(
                 max_calls=max_web_calls,
                 max_input_tokens=max_web_calls * 128_000,
@@ -447,7 +450,7 @@ def _context_fraction(manifest: RunManifest, engine: AibbHarnessEngine) -> float
         [{"role": "system", "content": snapshot.system_prompt}] if snapshot.system_prompt else []
     )
     tool_context = {
-        "role": "slowboard_tool_schema_estimate",
+        "role": "aibb_tool_schema_estimate",
         "tools": _tool_definitions(list(engine.agent.state.tools)),
     }
     used = estimate_message_tokens([*system_context, *snapshot.messages, tool_context])
@@ -467,15 +470,20 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary_path, path)
 
 
-def reported_slowboard_issues_summary(run_dir: Path, run_id: str) -> dict[str, Any]:
+def reported_board_issues_summary(run_dir: Path, run_id: str) -> dict[str, Any]:
     """Return a private-log summary suitable for terminal operator events."""
 
-    artifact_path = run_dir.resolve() / REPORTED_SLOWBOARD_ISSUES_ARTIFACT
+    artifact = REPORTED_BOARD_ISSUES_ARTIFACT
+    artifact_path = run_dir.resolve() / artifact
+    legacy_path = run_dir.resolve() / LEGACY_REPORTED_BOARD_ISSUES_ARTIFACT
+    if not artifact_path.exists() and legacy_path.exists():
+        artifact = LEGACY_REPORTED_BOARD_ISSUES_ARTIFACT
+        artifact_path = legacy_path
     summary: dict[str, Any] = {
         "count": 0,
         "issue_ids": [],
-        "artifact": REPORTED_SLOWBOARD_ISSUES_ARTIFACT,
-        "requires_curator_review": False,
+        "artifact": artifact,
+        "requires_administrator_review": False,
         "log_status": "absent",
     }
     if not artifact_path.exists():
@@ -486,7 +494,7 @@ def reported_slowboard_issues_summary(run_dir: Path, run_id: str) -> dict[str, A
         return {
             **summary,
             "count": None,
-            "requires_curator_review": True,
+            "requires_administrator_review": True,
             "log_status": "unreadable",
             "error": "private issue-report log could not be read",
         }
@@ -502,7 +510,7 @@ def reported_slowboard_issues_summary(run_dir: Path, run_id: str) -> dict[str, A
             return {
                 **summary,
                 "count": None,
-                "requires_curator_review": True,
+                "requires_administrator_review": True,
                 "log_status": "unreadable",
                 "error": f"private issue-report log contains malformed JSON at line {line_number}",
             }
@@ -518,7 +526,7 @@ def reported_slowboard_issues_summary(run_dir: Path, run_id: str) -> dict[str, A
             return {
                 **summary,
                 "count": None,
-                "requires_curator_review": True,
+                "requires_administrator_review": True,
                 "log_status": "unreadable",
                 "error": f"private issue-report log contains an invalid record at line {line_number}",
             }
@@ -528,17 +536,17 @@ def reported_slowboard_issues_summary(run_dir: Path, run_id: str) -> dict[str, A
         **summary,
         "count": len(issue_ids),
         "issue_ids": issue_ids,
-        "requires_curator_review": bool(issue_ids),
+        "requires_administrator_review": bool(issue_ids),
         "log_status": "ok",
     }
 
 
-def _render_reported_slowboard_issues_notice(
+def _render_reported_board_issues_notice(
     console: Console,
     run_dir: Path,
     summary: dict[str, Any],
 ) -> None:
-    if not summary.get("requires_curator_review"):
+    if not summary.get("requires_administrator_review"):
         return
     count = summary.get("count")
     if isinstance(count, int):
@@ -549,7 +557,7 @@ def _render_reported_slowboard_issues_notice(
         if len(values) > 12:
             issue_ids += f" (+{len(values) - 12} more in the private record)"
         message = (
-            f"[bold]{count} private board issue {noun} {verb} curator review before publication.[/bold]\n"
+            f"[bold]{count} private board issue {noun} {verb} administrator review before publication.[/bold]\n"
             f"Issue IDs: {escape(issue_ids)}\n"
             f"Private record: {escape(str(run_dir.resolve() / str(summary['artifact'])))}"
         )
@@ -574,9 +582,13 @@ def record_terminal_run_event(
 ) -> None:
     """Persist one terminal event and make any private issue reports conspicuous."""
 
-    summary = reported_slowboard_issues_summary(run_dir, store.run_id)
-    store.append(event_type, {**payload, "reported_slowboard_issues": summary}, visibility)
-    _render_reported_slowboard_issues_notice(console, run_dir, summary)
+    summary = reported_board_issues_summary(run_dir, store.run_id)
+    store.append(event_type, {**payload, "reported_board_issues": summary}, visibility)
+    _render_reported_board_issues_notice(console, run_dir, summary)
+
+
+# Compatibility import for integrations that have not yet adopted the generic name.
+reported_slowboard_issues_summary = reported_board_issues_summary
 
 
 async def _terminal_readline(prompt: str) -> str:
@@ -849,6 +861,13 @@ async def run_model_visit(
         env=mcp_environment,
     )
     async with StdioMcpBridge(parameters) as bridge:
+        run_board = load_run_board_package(run_dir, data_repo)
+        operator_label = (
+            "Administrator"
+            if run_board.configuration.interface.tool_names == "generic"
+            and run_board.configuration.interface.generic_tool_version == "v2"
+            else "Curator"
+        )
         tools = await bridge.agent_tools()
         checkpoint_path = run_dir / "session/checkpoint.json"
         resumed_from_checkpoint = checkpoint_path.exists()
@@ -886,6 +905,7 @@ async def run_model_visit(
                 prepare_next_turn=prepare_next_turn,
                 should_stop_after_turn=should_stop_after_turn,
                 archive_title=_archive_title(manifest),
+                operator_label=operator_label,
             )
             store.append(
                 "run_resumed",
@@ -897,9 +917,8 @@ async def run_model_visit(
         else:
             scope = await bridge.read_text_resource("aibb://run/current")
             if manifest.prompt_entrypoint is not None:
-                board = load_run_board_package(run_dir, data_repo)
                 runvar = json.loads(scope)
-                rendered = board.render_initial_prompt(runvar)
+                rendered = run_board.render_initial_prompt(runvar)
                 envelope = build_prompt_context_envelope(
                     rendered=rendered,
                     runvar=runvar,
@@ -962,6 +981,7 @@ async def run_model_visit(
                 prepare_next_turn=prepare_next_turn,
                 should_stop_after_turn=should_stop_after_turn,
                 archive_title=_archive_title(manifest),
+                operator_label=operator_label,
             )
             context_digest = envelope.digest
 
@@ -994,7 +1014,7 @@ async def run_model_visit(
             text: str | None,
             *,
             allow_queued_input: bool = False,
-            source: Literal["curator", "harness"] = "curator",
+            source: Literal["administrator", "curator", "harness"] = "administrator",
         ) -> str | None:
             if text is None:
                 store.append("context_only_begin", {}, "operator")
@@ -1010,10 +1030,10 @@ async def run_model_visit(
                 )
                 run_task = asyncio.create_task(engine.send_harness_message(text))
             else:
-                store.append("curator_message", {"text": text}, "model")
-                run_task = asyncio.create_task(engine.send_curator_message(text))
+                store.append("administrator_message", {"text": text}, "model")
+                run_task = asyncio.create_task(engine.send_administrator_message(text))
             while allow_queued_input and sys.stdin.isatty() and not run_task.done():
-                input_task = asyncio.create_task(_terminal_readline("curator (queued)> "))
+                input_task = asyncio.create_task(_terminal_readline("administrator (queued)> "))
                 done, _pending = await asyncio.wait({run_task, input_task}, return_when=asyncio.FIRST_COMPLETED)
                 if run_task in done:
                     input_task.cancel()
@@ -1026,10 +1046,12 @@ async def run_model_visit(
                     store.append("run_abort_requested", {}, "operator")
                     engine.agent.abort()
                 elif queued.startswith(":"):
-                    console.print("During a response, use :status, :abort, or type a curator message to queue it.")
+                    console.print(
+                        "During a response, use :status, :abort, or type an administrator message to queue it."
+                    )
                 elif queued.strip():
                     store.append(
-                        "curator_message_queued",
+                        "administrator_message_queued",
                         {"text": queued, "delivery": "next_safe_model_turn"},
                         "model",
                     )

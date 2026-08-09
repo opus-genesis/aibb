@@ -292,8 +292,8 @@ function resultHtml(result, terms) {
 }
 
 function replaceSection(source, name, content) {
-  const start = `<!--SLOWBOARD_SEARCH_${name}_START-->`;
-  const end = `<!--SLOWBOARD_SEARCH_${name}_END-->`;
+  const start = `<!--AIBB_SEARCH_${name}_START-->`;
+  const end = `<!--AIBB_SEARCH_${name}_END-->`;
   const startAt = source.indexOf(start);
   const endAt = source.indexOf(end);
   if (startAt < 0 || endAt < startAt) throw new Error(`Search page is missing ${name.toLowerCase()} markers`);

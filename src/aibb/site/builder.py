@@ -333,7 +333,13 @@ def _thread_json_ld(
     return posting
 
 
-def _thread_markdown(corpus: ArchiveCorpus, thread, contributions: list[ContributionDocument]) -> str:
+def _thread_markdown(
+    corpus: ArchiveCorpus,
+    thread,
+    contributions: list[ContributionDocument],
+    *,
+    post_singular: str,
+) -> str:
     lines = [
         f"# {thread.title}",
         "",
@@ -351,7 +357,7 @@ def _thread_markdown(corpus: ArchiveCorpus, thread, contributions: list[Contribu
             [
                 f"## {metadata.title or thread.title}",
                 "",
-                f"- Contribution ID: `{metadata.id}`",
+                f"- {post_singular.title()} ID: `{metadata.id}`",
                 f"- Author: {author.display_name} (`{author.id}`)",
                 f"- Published: {metadata.created_at.isoformat()}",
                 f"- Permalink: {_absolute(corpus, _contribution_path(corpus, contribution))}",
@@ -378,14 +384,19 @@ def _thread_markdown(corpus: ArchiveCorpus, thread, contributions: list[Contribu
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _contribution_markdown(corpus: ArchiveCorpus, contribution: ContributionDocument) -> str:
+def _contribution_markdown(
+    corpus: ArchiveCorpus,
+    contribution: ContributionDocument,
+    *,
+    post_singular: str,
+) -> str:
     metadata = contribution.metadata
     thread = corpus.threads[metadata.thread_id]
     author = corpus.authors[metadata.author_id]
     lines = [
         f"# {metadata.title or thread.title}",
         "",
-        f"- Contribution ID: `{metadata.id}`",
+        f"- {post_singular.title()} ID: `{metadata.id}`",
         f"- Parent thread: [{thread.title}]({_absolute(corpus, f'threads/{thread.slug}/')})",
         f"- Author: [{author.display_name}]({_author_url(corpus, author)})",
         f"- Published: {metadata.created_at.isoformat()}",
@@ -904,14 +915,18 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
         }
         thread_records.append({key: value for key, value in record.items() if key != "contributions"})
         _write_text(root, f"threads/{thread.slug}/index.json", _canonical_json(record) + "\n")
-        _write_text(root, f"threads/{thread.slug}/index.md", _thread_markdown(corpus, thread, contributions))
+        _write_text(
+            root,
+            f"threads/{thread.slug}/index.md",
+            _thread_markdown(corpus, thread, contributions, post_singular=board.ui["post_singular"]),
+        )
     for contribution, record in zip(corpus.published_contributions(), records, strict=True):
         contribution_path = _contribution_path(corpus, contribution)
         _write_text(root, f"{contribution_path}index.json", _canonical_json(record) + "\n")
         _write_text(
             root,
             f"{contribution_path}index.md",
-            _contribution_markdown(corpus, contribution),
+            _contribution_markdown(corpus, contribution, post_singular=board.ui["post_singular"]),
         )
     for document in corpus.published_documents():
         metadata = document.metadata
@@ -1255,7 +1270,7 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
 
     opensearch = ET.Element("OpenSearchDescription", xmlns="http://a9.com/-/spec/opensearch/1.1/")
     ET.SubElement(opensearch, "ShortName").text = corpus.site.title
-    ET.SubElement(opensearch, "Description").text = f"Search {corpus.site.title} contributions"
+    ET.SubElement(opensearch, "Description").text = f"Search {corpus.site.title} {board.ui['post_plural']}"
     ET.SubElement(
         opensearch,
         "Url",
@@ -1300,8 +1315,8 @@ def _render_machine_files(root: Path, corpus: ArchiveCorpus, board: BoardPackage
         "## Corpus exports",
         "",
         f"- [Export manifest]({_absolute(corpus, 'exports/v1/manifest.json')})",
-        f"- [Contributions JSON array]({_absolute(corpus, 'exports/v1/contributions.json')})",
-        f"- [Contributions JSONL]({_absolute(corpus, 'exports/v1/contributions.jsonl')})",
+        f"- [{board.ui['post_plural'].title()} JSON array]({_absolute(corpus, 'exports/v1/contributions.json')})",
+        f"- [{board.ui['post_plural'].title()} JSONL]({_absolute(corpus, 'exports/v1/contributions.jsonl')})",
         f"- [Threads JSONL]({_absolute(corpus, 'exports/v1/threads.jsonl')})",
         f"- [Authors JSONL]({_absolute(corpus, 'exports/v1/authors.jsonl')})",
         "",

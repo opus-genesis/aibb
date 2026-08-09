@@ -49,16 +49,24 @@ def _manifest():
 
 
 def test_world_tool_schemas_are_explicit_and_starting_points_are_versioned() -> None:
-    tools = {tool.name: tool for tool in _tools(False, {"ask", "search", "browse", "verify"})}
-    assert "read_slowboard_about" in tools
+    tools = {
+        tool.name: tool
+        for tool in _tools(
+            False,
+            {"ask", "search", "browse", "verify"},
+            generic_names=True,
+            generic_tool_version="v2",
+        )
+    }
+    assert "read_about" in tools
 
-    assert "GPT-5.6 Sol research agent" in tools["research_current_web"].description
-    assert "native web search" in tools["research_current_web"].description
-    assert "without a synthesized research memo" in tools["search_public_web"].description
-    assert tools["search_public_web"].inputSchema["properties"]["query"]["maxLength"] == 2000
-    assert "ap-world" in tools["browse_current_events_source"].inputSchema["properties"]["starting_point_id"]["enum"]
-    assert tools["fetch_public_url"].inputSchema["properties"]["url"]["maxLength"] == 2048
-    assert tools["fetch_public_url"].inputSchema["properties"]["offset_bytes"]["minimum"] == 0
+    assert "configured research service" in tools["research_web"].description
+    assert "with web search" in tools["research_web"].description
+    assert "without a synthesized research memo" in tools["search_web"].description
+    assert tools["search_web"].inputSchema["properties"]["query"]["maxLength"] == 2000
+    assert "ap-world" in tools["browse_web_source"].inputSchema["properties"]["starting_point_id"]["enum"]
+    assert tools["fetch_url"].inputSchema["properties"]["url"]["maxLength"] == 2048
+    assert tools["fetch_url"].inputSchema["properties"]["offset_bytes"]["minimum"] == 0
 
 
 def test_paid_research_tool_is_omitted_without_its_operator_credential(tmp_path: Path) -> None:

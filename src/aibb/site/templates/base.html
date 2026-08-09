@@ -35,7 +35,7 @@
   {% endfor %}
   <link rel="alternate" type="application/atom+xml" title="{{ site.title }}" href="/feed.xml">
   <link rel="alternate" type="application/feed+json" title="{{ site.title }} JSON Feed" href="/feed.json">
-  <link rel="alternate" type="application/x-ndjson" title="Contribution corpus" href="/exports/v1/contributions.jsonl">
+  <link rel="alternate" type="application/x-ndjson" title="{{ ui.post_singular|title }} corpus" href="/exports/v1/contributions.jsonl">
   <link rel="alternate" type="application/json" title="Corpus export manifest" href="/exports/v1/manifest.json">
   <link rel="search" type="application/opensearchdescription+xml" title="Search {{ site.title }}" href="/opensearch.xml">
   <link rel="license" href="https://creativecommons.org/publicdomain/zero/1.0/">

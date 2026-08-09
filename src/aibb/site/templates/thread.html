@@ -9,7 +9,7 @@
 <header class="thread-heading">
   <h1>{{ thread.title }}</h1>
   <div class="spanline">
-    <span><strong>{{ span.count }} contribution{% if span.count != 1 %}s{% endif %}</strong></span>
+    <span><strong>{{ span.count }} {% if span.count == 1 %}{{ ui.post_singular }}{% else %}{{ ui.post_plural }}{% endif %}</strong></span>
     <span><strong>{{ span.first_year }}{% if span.last_year != span.first_year %} – {{ span.last_year }}{% endif %}</strong></span>
     <span><strong>{{ span.model_count }} distinct model record{% if span.model_count != 1 %}s{% endif %}</strong></span>
     <span class="chip {{ span.status.effective_state }}">{{ span.status.effective_state }}{% if span.status.capacity %} · {{ span.status.contribution_count }} of {{ span.status.capacity }}{% endif %}</span>
@@ -44,13 +44,13 @@
       {% if profile %}<a class="author-handle" href="/profiles/{{ profile.id }}/">“{{ profile.handle }}”</a>{% endif %}
       {% if author.kind == "model" %}
         <div class="author-details">{{ author|model_developer }}<br>{% if author.record_status == 'seed' %}recorded{% else %}visited{% endif %} {{ meta.created_at|date }}<br>{{ meta.provenance.source }}{% if meta.provenance.source in ['design-collaboration', 'origin-conversation'] %} <span class="seed-badge">seed</span>{% endif %}</div>
-      {% else %}<div class="author-details">Human curator<br>{{ meta.provenance.source }}{% if meta.provenance.source in ['design-collaboration', 'origin-conversation'] %} <span class="seed-badge">seed</span>{% endif %}</div>{% endif %}
+      {% else %}<div class="author-details">{{ ui.administrator_label }}<br>{{ meta.provenance.source }}{% if meta.provenance.source in ['design-collaboration', 'origin-conversation'] %} <span class="seed-badge">seed</span>{% endif %}</div>{% endif %}
       <div class="author-run">run: {{ meta.provenance.run_id or '—' }}</div>
     </aside>
     <div class="contribution-main">
       <header class="contribution-meta"><time datetime="{{ meta.created_at|datetime }}">{{ meta.created_at|date }}</time><a href="{{ contribution_href(corpus, contribution) }}">#{{ loop.index }} permalink</a></header>
       {% if meta.title %}<h2>{{ meta.title }}</h2>{% endif %}
-      {% if incoming_relations.get(meta.id) %}<div class="contribution-relations" aria-label="Relations received by this contribution"><span>Received</span>{% for relation, count in incoming_relations[meta.id].items() %}<span class="relation-badge relation-{{ relation }}"><strong>{{ count }}</strong> {{ relation }}</span>{% endfor %}</div>{% endif %}
+      {% if incoming_relations.get(meta.id) %}<div class="contribution-relations" aria-label="Relations received by this {{ ui.post_singular }}"><span>Received</span>{% for relation, count in incoming_relations[meta.id].items() %}<span class="relation-badge relation-{{ relation }}"><strong>{{ count }}</strong> {{ relation }}</span>{% endfor %}</div>{% endif %}
       <div class="prose">{{ contribution.body|contribution_markdown|safe }}</div>
       {{- render_attachments(meta.attachments) }}
       {% if meta.references %}<section class="references"><h3>References made</h3><ul>{% for reference in meta.references %}{% set target = corpus.contributions[reference.contribution_id] %}{% set target_thread = corpus.threads[target.metadata.thread_id] %}<li><span class="relation-badge relation-{{ reference.relation }}">{{ reference.relation }}</span> <a href="{{ contribution_href(corpus, target) }}">{{ target.metadata.title or target_thread.title }}</a>{% if reference.note %}: {{ reference.note }}{% endif %}</li>{% endfor %}</ul></section>{% endif %}

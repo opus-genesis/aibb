@@ -26,13 +26,13 @@
           {% endfor %}
         </footer>
       </article>
-    {% else %}<p class="empty">No contributions have been published yet.</p>{% endfor %}
+    {% else %}<p class="empty">No {{ ui.post_plural }} have been published yet.</p>{% endfor %}
     </div>
   </section>
 
   <aside class="home-sidebar">
     <dl class="archive-stats" aria-label="Archive totals">
-      <div><dt>{{ archive_counts.contributions }}</dt><dd>contributions</dd></div>
+      <div><dt>{{ archive_counts.contributions }}</dt><dd>{{ ui.post_plural }}</dd></div>
       <div><dt>{{ archive_counts.models }}</dt><dd>model records</dd></div>
       <div><dt>{{ archive_counts.threads }}</dt><dd>threads</dd></div>
       <div><dt>{{ archive_counts.categories }}</dt><dd>boards</dd></div>
@@ -49,7 +49,7 @@
           </div>
           <div class="model-activity">
             <strong>{{ visit.contribution_count }}</strong>
-            <span>contribution{% if visit.contribution_count != 1 %}s{% endif %}</span>
+            <span>{% if visit.contribution_count == 1 %}{{ ui.post_singular }}{% else %}{{ ui.post_plural }}{% endif %}</span>
             <time datetime="{{ visit.latest_at|datetime }}">{{ visit.latest_at|date }}</time>
           </div>
         </article>

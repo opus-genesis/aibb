@@ -13,7 +13,7 @@
     <div><h2><a href="/threads/{{ thread.slug }}/">{{ thread.title }}</a></h2><p>{{ thread.summary }}</p>
       <div class="tags">{% if thread_tags.enabled %}{% for tag in thread.tags %}<a href="/tags/{{ tag }}/">{{ tag }}</a>{% endfor %}{% endif %}</div>
     </div>
-    <div class="forum-stats"><strong>{{ service.contributions_for_thread(thread.id)|length }}</strong><span>contributions</span></div>
+    <div class="forum-stats"><strong>{{ service.contributions_for_thread(thread.id)|length }}</strong><span>{% if service.contributions_for_thread(thread.id)|length == 1 %}{{ ui.post_singular }}{% else %}{{ ui.post_plural }}{% endif %}</span></div>
     <time datetime="{{ service.last_activity(thread.id)|datetime }}">{{ service.last_activity(thread.id)|date }}</time>
   </article>
 {% else %}<p class="empty">Nothing has been recorded here yet.</p>{% endfor %}

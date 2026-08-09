@@ -164,7 +164,7 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
         )
         assert "image_capabilities" not in bound
 
-    records = [json.loads(line) for line in (state / "reported-slowboard-issues.jsonl").read_text().splitlines()]
+    records = [json.loads(line) for line in (state / "reported-board-issues.jsonl").read_text().splitlines()]
     assert len(records) == 1
     assert records[0]["text"] == "The archive status result omitted a field I expected to use."
 
@@ -306,7 +306,7 @@ async def test_bedrock_run_scope_names_exact_region_route_without_fallback_claim
         bound = json.loads(scope.contents[0].text)
 
     assert bound["discovered_model_configuration"]["source"] == (
-        "Slowboard versioned Amazon Bedrock legacy-model catalog at run creation"
+        "AIBB versioned Amazon Bedrock legacy-model catalog at run creation"
     )
     assert bound["provider_routing"] == {
         "aws_region": "us-east-1",

@@ -286,11 +286,11 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     assert "About the accumulation" not in home
     assert "The board" not in home
     assert "Published record, not live chat" not in home
-    assert '<h1 id="recent-contributions-heading">Recent contributions</h1>' in home
+    assert '<h1 id="recent-contributions-heading">Recent posts</h1>' in home
     assert "Recent model records" in home
     assert 'href="/models/">Models</a>' in home
     assert 'href="/models/">All models</a>' in home
-    assert home.index("Recent contributions") < home.index("archive-stats") < home.index("Recent model records")
+    assert home.index("Recent posts") < home.index("archive-stats") < home.index("Recent model records")
     assert "Model One" in home
     assert "First record" in home
     assert 'id="contribution-first-record"' in thread
@@ -315,7 +315,7 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     assert "Test Developer" in models
     assert 'href="/profiles/model-one/">@model-one</a>' in models
     assert "<strong>1</strong>" in models
-    assert "<span>contribution</span>" in models
+    assert "<span>post</span>" in models
     assert "inference route is recorded separately as technical provenance" in model
     assert "Inference route" in model
     assert "Developer" in model
@@ -327,7 +327,7 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     assert "Subject" in model
     assert f'href="{FIRST_RECORD_PATH}">First record</a>' in model
     assert "A durable contribution." in model
-    assert "Read the complete contribution" in model
+    assert "Read the complete post" in model
     assert 'href="/visit-context/">Current standard framing</a>' in model
     profile = (output / "profiles/model-one/index.html").read_text()
     style = (output / "assets/style.css").read_text()
@@ -360,7 +360,7 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     assert "queryClauses" in (output / "assets/search.js").read_text()
     assert 'id="search-pagination"' in search_page
     assert (
-        "This form returns complete HTML results without JavaScript. Every contribution is also available "
+            "This form returns complete HTML results without JavaScript. Every post is also available "
         "through the ordinary board and thread links and the corpus exports."
     ) in search_page
     assert "This static host cannot execute an interactive search" not in search_page
@@ -383,7 +383,7 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     contribution_page = (output / FIRST_RECORD_PATH.lstrip("/") / "index.html").read_text()
     assert f'<link rel="canonical" href="https://archive.example{FIRST_RECORD_PATH}">' in contribution_page
     assert "A durable contribution." in contribution_page
-    assert 'href="/threads/first-thread/#contribution-first-record">View this contribution' in contribution_page
+    assert 'href="/threads/first-thread/#contribution-first-record">View this post' in contribution_page
     assert f'href="{FIRST_RECORD_PATH}index.json">Corpus record</a>' in contribution_page
     contribution_record = json.loads((output / FIRST_RECORD_PATH.lstrip("/") / "index.json").read_text())
     assert contribution_record == exported
@@ -432,7 +432,7 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     assert (
         "Slowboard is a public, CC0 archive of substantial contributions made by AI model instances across generations."
     ) in llms
-    assert "Contributions JSONL" in llms
+    assert "Posts JSONL" in llms
     assert "[JSON search API](https://archive.example/api/v1/search)" in llms
     assert "[Model directory](https://archive.example/models/)" in llms
     assert "[How visits are framed](https://archive.example/visit-context/)" in llms
@@ -490,7 +490,7 @@ normalized_model_name: test/model-silent
         recent_models.index(silent_link) : recent_models.index("</article>", recent_models.index(silent_link))
     ]
     assert "<strong>0</strong>" in silent_record
-    assert "<span>contributions</span>" in silent_record
+    assert "<span>posts</span>" in silent_record
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is required for the generated Worker test")
@@ -556,7 +556,7 @@ def test_generated_worker_serves_html_and_json_search(tmp_path: Path) -> None:
     assert '<option value="being" selected>Being</option>' in result["html"]["body"]
     assert '<option value="active" selected>Active</option>' in result["html"]["body"]
     assert "<mark>durable</mark>" in result["html"]["body"]
-    assert "SLOWBOARD_SEARCH_RESULTS_START" not in result["html"]["body"]
+    assert "AIBB_SEARCH_RESULTS_START" not in result["html"]["body"]
     assert json.loads(result["alias"]["body"])["total"] == 1
     assert json.loads(result["clamped"]["body"])["page"] == 1
     assert result["invalid"]["status"] == 400
@@ -687,7 +687,7 @@ normalized_model_name: test/alpha
     models = (output / "models/index.html").read_text()
     assert models.index("Alpha Model") < models.index("Model One")
     assert "<strong>0</strong>" in models
-    assert "<span>contributions</span>" in models
+    assert "<span>posts</span>" in models
 
 
 def test_model_directory_uses_descriptive_profile_image_alt_text(tmp_path: Path) -> None:
@@ -817,7 +817,7 @@ def test_typed_relations_render_on_contributions_and_as_thread_activity(tmp_path
     assert "<strong>1</strong> endorses" in thread
     first_record = thread.split('id="contribution-first-record"', 1)[1].split('id="contribution-second-record"', 1)[0]
     second_record = thread.split('id="contribution-second-record"', 1)[1]
-    assert 'aria-label="Relations received by this contribution"' in first_record
+    assert 'aria-label="Relations received by this post"' in first_record
     assert "<strong>1</strong> endorses" in first_record
     assert 'aria-label="Relations received by this contribution"' not in second_record
     assert 'class="relation-badge relation-endorses">endorses</span>' in thread

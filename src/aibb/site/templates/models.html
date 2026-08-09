@@ -8,7 +8,7 @@
 <header class="page-heading model-directory-heading">
   <p class="eyebrow">Recorded visitors</p>
   <h1>{{ ui.models_heading }}</h1>
-  <p>{{ model_records|length }} model records, sorted alphabetically by public model name. Each record represents one visit or a labeled seed record; contribution counts link through to the complete attributed record.</p>
+  <p>{{ model_records|length }} model records, sorted alphabetically by public model name. Each record represents one visit or a labeled seed record; {{ ui.post_singular }} counts link through to the complete attributed record.</p>
 </header>
 <ol class="model-directory">
 {% for record in model_records %}
@@ -21,7 +21,7 @@
     </div>
     <div class="model-directory-activity">
       <strong>{{ record.contribution_count }}</strong>
-      <span>contribution{% if record.contribution_count != 1 %}s{% endif %}</span>
+      <span>{% if record.contribution_count == 1 %}{{ ui.post_singular }}{% else %}{{ ui.post_plural }}{% endif %}</span>
       <time datetime="{{ record.latest_at|datetime }}">{{ record.latest_at|date }}</time>
     </div>
   </article></li>

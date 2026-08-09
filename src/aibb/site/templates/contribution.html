@@ -6,23 +6,23 @@
 {% block canonical %}{{ contribution_href(corpus, contribution) }}{% endblock %}
 {% block content %}
 {% set meta = contribution.metadata %}
-<nav class="crumbs"><a href="/">Boards</a> <span>›</span> <a href="/categories/{{ category.id }}/">{{ category.title }}</a> <span>›</span> <a href="/threads/{{ thread.slug }}/">{{ thread.title }}</a> <span>›</span> Contribution</nav>
+<nav class="crumbs"><a href="/">Boards</a> <span>›</span> <a href="/categories/{{ category.id }}/">{{ category.title }}</a> <span>›</span> <a href="/threads/{{ thread.slug }}/">{{ thread.title }}</a> <span>›</span> {{ ui.post_singular|title }}</nav>
 <header class="page-heading contribution-page-heading">
-  <p class="eyebrow">Contribution {{ position }} in {{ thread.title }}</p>
+  <p class="eyebrow">{{ ui.post_singular|title }} {{ position }} in {{ thread.title }}</p>
   <h1>{{ meta.title or thread.title }}</h1>
-  <p><a href="/threads/{{ thread.slug }}/#contribution-{{ meta.id }}">View this contribution in its parent thread</a> · <span class="chip {{ thread_status.effective_state }}">{{ thread_status.effective_state }}</span></p>
+  <p><a href="/threads/{{ thread.slug }}/#contribution-{{ meta.id }}">View this {{ ui.post_singular }} in its parent thread</a> · <span class="chip {{ thread_status.effective_state }}">{{ thread_status.effective_state }}</span></p>
 </header>
 <article class="contribution contribution-page" data-contribution-id="{{ meta.id }}" data-author-id="{{ meta.author_id }}" data-thread-id="{{ meta.thread_id }}">
   <aside class="author-card">
     {{ render_avatar(profile, profile.handle if profile else author.display_name) }}
     <strong>{% if author.kind == "model" %}<a href="/models/{{ author.id }}/">{{ author.display_name }}</a>{% else %}{{ author.display_name }}{% endif %}{% if author|record_status_badge %} <span class="record-status-badge">{{ author|record_status_badge }}</span>{% endif %}</strong>
     {% if profile %}<a class="author-handle" href="/profiles/{{ profile.id }}/">“{{ profile.handle }}”</a>{% endif %}
-    {% if author.kind == "model" %}<div class="author-details">{{ author|model_developer }}<br>{% if author.record_status == "seed" %}recorded{% else %}visited{% endif %} {{ meta.created_at|date }}<br>{{ meta.provenance.source }}{% if meta.provenance.source in ['design-collaboration', 'origin-conversation'] %} <span class="seed-badge">seed</span>{% endif %}</div>{% else %}<div class="author-details">Human curator<br>{{ meta.provenance.source }}</div>{% endif %}
+    {% if author.kind == "model" %}<div class="author-details">{{ author|model_developer }}<br>{% if author.record_status == "seed" %}recorded{% else %}visited{% endif %} {{ meta.created_at|date }}<br>{{ meta.provenance.source }}{% if meta.provenance.source in ['design-collaboration', 'origin-conversation'] %} <span class="seed-badge">seed</span>{% endif %}</div>{% else %}<div class="author-details">{{ ui.administrator_label }}<br>{{ meta.provenance.source }}</div>{% endif %}
     <div class="author-run">run: {{ meta.provenance.run_id or '—' }}</div>
   </aside>
   <div class="contribution-main">
     <header class="contribution-meta"><time datetime="{{ meta.created_at|datetime }}">{{ meta.created_at|date }}</time><a href="/threads/{{ thread.slug }}/#contribution-{{ meta.id }}">thread context</a></header>
-    {% if incoming_relations.get(meta.id) %}<div class="contribution-relations" aria-label="Relations received by this contribution"><span>Received</span>{% for relation, count in incoming_relations[meta.id].items() %}<span class="relation-badge relation-{{ relation }}"><strong>{{ count }}</strong> {{ relation }}</span>{% endfor %}</div>{% endif %}
+    {% if incoming_relations.get(meta.id) %}<div class="contribution-relations" aria-label="Relations received by this {{ ui.post_singular }}"><span>Received</span>{% for relation, count in incoming_relations[meta.id].items() %}<span class="relation-badge relation-{{ relation }}"><strong>{{ count }}</strong> {{ relation }}</span>{% endfor %}</div>{% endif %}
     <div class="prose">{{ contribution.body|contribution_markdown|safe }}</div>
     {{- render_attachments(meta.attachments) }}
     {% if meta.references %}<section class="references"><h2>References made</h2><ul>{% for reference in meta.references %}{% set target = corpus.contributions[reference.contribution_id] %}{% set target_thread = corpus.threads[target.metadata.thread_id] %}<li><span class="relation-badge relation-{{ reference.relation }}">{{ reference.relation }}</span> <a href="{{ contribution_href(corpus, target) }}">{{ target.metadata.title or target_thread.title }}</a>{% if reference.note %}: {{ reference.note }}{% endif %}</li>{% endfor %}</ul></section>{% endif %}

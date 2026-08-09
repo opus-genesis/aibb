@@ -28,7 +28,7 @@ from aibb.harness.runner import (
     _turn_boundary_outcome,
     create_run_manifest,
     record_terminal_run_event,
-    reported_slowboard_issues_summary,
+    reported_board_issues_summary,
 )
 from aibb.harness.tinker import (
     TINKER_ANTHROPIC_ENDPOINT,
@@ -39,13 +39,14 @@ from aibb.harness.tinker import (
 from aibb.runtime import BudgetLedger, RunManifest
 from aibb.runtime.budget import Usage
 from aibb.runtime.models import AmazonBedrockRouteConfiguration, BudgetLimits
+from aibb.scaffold import create_board
 from aibb.sessions import SessionStore
 
 
-def test_terminal_run_event_reports_private_slowboard_issues_without_copying_bodies(tmp_path: Path) -> None:
+def test_terminal_run_event_reports_private_board_issues_without_copying_bodies(tmp_path: Path) -> None:
     manifest = make_manifest()
     run_dir = tmp_path / manifest.run_id
-    issue_log = run_dir / "mcp/reported-slowboard-issues.jsonl"
+    issue_log = run_dir / "mcp/reported-board-issues.jsonl"
     issue_log.parent.mkdir(parents=True)
     issue_log.write_text(
         "".join(
@@ -80,13 +81,13 @@ def test_terminal_run_event_reports_private_slowboard_issues_without_copying_bod
     )
 
     event = store.read_events()[-1]
-    summary = event.payload["reported_slowboard_issues"]
+    summary = event.payload["reported_board_issues"]
     assert summary == {
-        "artifact": "mcp/reported-slowboard-issues.jsonl",
+        "artifact": "mcp/reported-board-issues.jsonl",
         "count": 2,
         "issue_ids": ["issue-0123456789abcdef", "issue-fedcba9876543210"],
         "log_status": "ok",
-        "requires_curator_review": True,
+        "requires_administrator_review": True,
     }
     assert "article body" not in event.model_dump_json()
     assert "search cursor" not in event.model_dump_json()
@@ -100,14 +101,14 @@ def test_terminal_run_event_reports_private_slowboard_issues_without_copying_bod
 def test_terminal_issue_summary_requires_review_when_private_log_is_malformed(tmp_path: Path) -> None:
     manifest = make_manifest()
     run_dir = tmp_path / manifest.run_id
-    issue_log = run_dir / "mcp/reported-slowboard-issues.jsonl"
+    issue_log = run_dir / "mcp/reported-board-issues.jsonl"
     issue_log.parent.mkdir(parents=True)
     issue_log.write_text("{not-json\n", encoding="utf-8")
 
-    summary = reported_slowboard_issues_summary(run_dir, manifest.run_id)
+    summary = reported_board_issues_summary(run_dir, manifest.run_id)
 
     assert summary["count"] is None
-    assert summary["requires_curator_review"] is True
+    assert summary["requires_administrator_review"] is True
     assert summary["log_status"] == "unreadable"
     assert summary["error"] == "private issue-report log contains malformed JSON at line 1"
 
@@ -115,12 +116,68 @@ def test_terminal_issue_summary_requires_review_when_private_log_is_malformed(tm
 def test_terminal_issue_summary_is_explicit_when_no_issue_log_exists(tmp_path: Path) -> None:
     manifest = make_manifest()
 
-    summary = reported_slowboard_issues_summary(tmp_path, manifest.run_id)
+    summary = reported_board_issues_summary(tmp_path, manifest.run_id)
 
     assert summary["count"] == 0
     assert summary["issue_ids"] == []
-    assert summary["requires_curator_review"] is False
+    assert summary["requires_administrator_review"] is False
     assert summary["log_status"] == "absent"
+
+
+def test_new_generic_board_omits_guestbook_budget_without_quota_exempt_thread(tmp_path: Path) -> None:
+    data = tmp_path / "board"
+    create_board(
+        destination=data,
+        title="AIBB",
+        base_url="https://board.example/",
+        curator_name="Board administrator",
+        description="A generic test board.",
+    )
+
+    manifest, _run_dir = create_run_manifest(
+        data_repo=data,
+        state_root=tmp_path / "state",
+        model_id="example/model",
+        display_name="Example Model",
+        generation=None,
+        lineage=None,
+        mode="headless",
+        compaction_policy="deny",
+        contribution_quota=2,
+        max_output_tokens=4096,
+        max_provider_turns=10,
+        max_total_tokens=100_000,
+        max_cost_usd=1,
+        max_contributions_per_thread=1,
+        model_context_window=128_000,
+        model_max_completion_tokens=4096,
+        prompt_price_per_token=0.0,
+        completion_price_per_token=0.0,
+        allow_repeat_reason=None,
+        developer="Example",
+        provider="openrouter",
+    )
+
+    assert "guestbook_entries" not in manifest.capability_budgets
+    assert manifest.capability_budgets["contributions"].max_calls == 2
+
+
+def test_generic_cli_help_uses_board_vocabulary_and_keeps_legacy_flags_hidden() -> None:
+    root_help = CliRunner().invoke(app, ["--help"])
+    run_help = CliRunner().invoke(app, ["run", "--help"])
+    new_board_help = CliRunner().invoke(app, ["new-board", "--help"])
+
+    assert root_help.exit_code == run_help.exit_code == new_board_help.exit_code == 0
+    assert "admin" in root_help.output
+    assert "curator" not in root_help.output.casefold()
+    assert "materialize" not in root_help.output.casefold()
+    assert "--post-limit" in run_help.output
+    assert "--max-posts-per-thread" in run_help.output
+    assert "--admin-note" in run_help.output
+    assert "contribution" not in run_help.output.casefold()
+    assert "curator" not in run_help.output.casefold()
+    assert "--admin" in new_board_help.output
+    assert "curator" not in new_board_help.output.casefold()
 
 
 def test_bedrock_probe_cli_requires_explicit_credentials(monkeypatch) -> None:

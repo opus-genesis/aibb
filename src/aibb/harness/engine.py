@@ -104,8 +104,11 @@ def _labeled_user_message(label: str, text: str) -> UserMessage:
     )
 
 
-def _curator_message(text: str) -> UserMessage:
-    return _labeled_user_message("Curator", text)
+def _administrator_message(text: str) -> UserMessage:
+    return _labeled_user_message("Administrator", text)
+
+
+_curator_message = _administrator_message
 
 
 def _harness_message(archive_title: str, text: str) -> UserMessage:
@@ -126,13 +129,15 @@ class AibbHarnessEngine:
         thinking_level: str = "off",
         provider_state: dict[str, Any] | None = None,
         context_generation: int = 0,
-        archive_title: str = "Slowboard",
+        archive_title: str = "AIBB",
+        operator_label: str = "Administrator",
         prepare_next_turn: Callable[[AibbHarnessEngine], AgentLoopTurnUpdate | None | Any] | None = None,
         should_stop_after_turn: Callable[[AibbHarnessEngine], bool | Any] | None = None,
     ) -> None:
         self.provider_state = dict(provider_state or {})
         self.context_generation = context_generation
         self.archive_title = archive_title
+        self.operator_label = operator_label
 
         async def prepare(_signal: Any) -> AgentLoopTurnUpdate | None:
             if prepare_next_turn is None:
@@ -175,7 +180,8 @@ class AibbHarnessEngine:
         stream_fn: Callable[..., Any],
         prepare_next_turn: Callable[[AibbHarnessEngine], AgentLoopTurnUpdate | None | Any] | None = None,
         should_stop_after_turn: Callable[[AibbHarnessEngine], bool | Any] | None = None,
-        archive_title: str = "Slowboard",
+        archive_title: str = "AIBB",
+        operator_label: str = "Administrator",
     ) -> AibbHarnessEngine:
         return cls(
             model=Model.model_validate(snapshot.model),
@@ -187,6 +193,7 @@ class AibbHarnessEngine:
             provider_state=snapshot.provider_state,
             context_generation=snapshot.context_generation,
             archive_title=archive_title,
+            operator_label=operator_label,
             prepare_next_turn=prepare_next_turn,
             should_stop_after_turn=should_stop_after_turn,
         )
@@ -201,8 +208,13 @@ class AibbHarnessEngine:
 
         return self._agent
 
+    async def send_administrator_message(self, text: str) -> None:
+        await self._agent.prompt(_labeled_user_message(self.operator_label, text))
+
     async def send_curator_message(self, text: str) -> None:
-        await self._agent.prompt(_curator_message(text))
+        """Compatibility alias for older integrations."""
+
+        await self.send_administrator_message(text)
 
     async def send_harness_message(self, text: str) -> None:
         """Send a versioned, automatically generated operational message."""
@@ -215,10 +227,10 @@ class AibbHarnessEngine:
         await self._agent.continue_()
 
     def steer(self, text: str) -> None:
-        self._agent.steer(_curator_message(text))
+        self._agent.steer(_labeled_user_message(self.operator_label, text))
 
     def follow_up(self, text: str) -> None:
-        self._agent.followUp(_curator_message(text))
+        self._agent.followUp(_labeled_user_message(self.operator_label, text))
 
     def replace_model_visible_context(self, snapshot: EngineSnapshot) -> AgentLoopTurnUpdate:
         """Install a recorded context transition at a safe Harn turn boundary."""

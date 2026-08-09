@@ -97,30 +97,36 @@ def _tool_result_summary(name: str, content: str) -> tuple[str, Any | None]:
         )
     if profile := value.get("profile_draft"):
         return f"profile draft revision {profile.get('revision', '?')} · @{profile.get('handle', '?')}", None
-    if value.get("contribution_id"):
-        remaining = value.get("remaining_run_contributions", value.get("remaining_contributions", "?"))
+    if value.get("post_id") or value.get("contribution_id"):
+        post_id = value.get("post_id", value.get("contribution_id"))
+        remaining = value.get(
+            "remaining_posts",
+            value.get("remaining_run_contributions", value.get("remaining_contributions", "?")),
+        )
         return (
-            f"finished {value['contribution_id']} in {value.get('thread_id', '?')} "
-            f"· {remaining} contribution slots remain",
+            f"saved {post_id} in {value.get('thread_id', '?')} · {remaining} post slots remain",
             None,
         )
     if value.get("profile_id"):
         return f"finished profile {value['profile_id']}", None
-    if value.get("issue_id") and value.get("status") == "recorded_for_curator_review":
-        return f"recorded {value['issue_id']} for curator review", None
+    if value.get("issue_id") and value.get("status") in {
+        "recorded_for_curator_review",
+        "reported_to_administrator",
+    }:
+        return f"recorded {value['issue_id']} for administrator review", None
     if value.get("concluded_at"):
         return f"visit concluded by {value.get('concluded_by', 'model')}", None
     if thread := value.get("thread"):
         pagination = value.get("page") or value.get("pagination") or {}
+        posts = value.get("posts", value.get("contributions") or [])
         return (
             f"read “{thread.get('title', thread.get('thread_id', thread.get('id', 'thread')))}” · "
-            f"{pagination.get('returned', len(value.get('contributions') or []))} of "
-            f"{pagination.get('total', len(value.get('contributions') or []))} contributions",
+            f"{pagination.get('returned', len(posts))} of {pagination.get('total', len(posts))} posts",
             None,
         )
     if isinstance(value.get("hits"), list):
         page = value.get("page") or (value.get("pages") or {}).get("contributions") or {}
-        return f"returned {page.get('returned', len(value['hits']))} matching contributions", None
+        return f"returned {page.get('returned', len(value['hits']))} matching posts", None
     for plural, singular in (("threads", "threads"), ("categories", "categories"), ("documents", "documents")):
         if plural in value and isinstance(value[plural], list):
             pagination = value.get("page") or value.get("pagination") or {}
@@ -310,8 +316,15 @@ class RunEventRenderer:
                     border_style="blue",
                 )
             )
-        elif event_type in {"curator_message", "curator_message_queued"}:
-            self.console.print(Panel(Markdown(str(payload.get("text") or "")), title="Curator", border_style="magenta"))
+        elif event_type in {
+            "administrator_message",
+            "administrator_message_queued",
+            "curator_message",
+            "curator_message_queued",
+        }:
+            self.console.print(
+                Panel(Markdown(str(payload.get("text") or "")), title="Administrator", border_style="magenta")
+            )
         elif event_type == "headless_continuation_message":
             version = escape(str(payload.get("version") or "unknown"))
             self.console.print(
@@ -399,10 +412,10 @@ class RunEventRenderer:
             self.console.print(f"[bold blue]{escape(event_type.replace('_', ' '))}[/bold blue]")
             self.console.print(Pretty(_bounded(payload)), style="dim")
         elif event_type in TERMINAL_EVENTS:
-            issues = payload.get("reported_slowboard_issues") or {}
-            if issues.get("requires_curator_review"):
+            issues = payload.get("reported_board_issues") or payload.get("reported_slowboard_issues") or {}
+            if issues.get("requires_administrator_review") or issues.get("requires_curator_review"):
                 count = issues.get("count")
-                artifact = escape(str(issues.get("artifact") or "mcp/reported-slowboard-issues.jsonl"))
+                artifact = escape(str(issues.get("artifact") or "mcp/reported-board-issues.jsonl"))
                 if isinstance(count, int):
                     noun = "report" if count == 1 else "reports"
                     verb = "requires" if count == 1 else "require"
@@ -411,7 +424,7 @@ class RunEventRenderer:
                     if len(values) > 12:
                         issue_ids += f" (+{len(values) - 12} more in the private record)"
                     message = (
-                        f"[bold]{count} private board issue {noun} {verb} curator review before "
+                        f"[bold]{count} private board issue {noun} {verb} administrator review before "
                         "publication.[/bold]\n"
                         f"Issue IDs: {escape(issue_ids)}\n"
                         f"Private record: {artifact}"
