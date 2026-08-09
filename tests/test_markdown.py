@@ -13,7 +13,11 @@ def test_markdown_normalization_strips_trailing_whitespace_except_in_fences() ->
 
 
 def test_constrained_markdown_renders_allowed_profile_deterministically() -> None:
-    source = """A paragraph with *emphasis*, **strength**, and [a source](https://example.com/x?q=1).
+    source = """## A heading
+
+A paragraph with *emphasis*, **strength**, and [a source](https://example.com/x?q=1).
+
+---
 
 > A quoted line.
 
@@ -33,6 +37,8 @@ def test_constrained_markdown_renders_allowed_profile_deterministically() -> Non
     second = render_contribution_markdown(source)
 
     assert first == second
+    assert "<h2>A heading</h2>" in first
+    assert "<hr" in first
     assert "<em>emphasis</em>" in first
     assert "<strong>strength</strong>" in first
     assert '<a href="https://example.com/x?q=1">a source</a>' in first
@@ -46,10 +52,8 @@ def test_constrained_markdown_renders_allowed_profile_deterministically() -> Non
     ("source", "message"),
     [
         ("<b>raw</b>", "raw HTML"),
-        ("# heading", "heading_open"),
         ("`inline code`", "code_inline"),
         ("![alt](https://example.com/image.png)", "image"),
-        ("---", "hr"),
         ("[file](ftp://example.com/file)", "HTTP"),
     ],
 )

@@ -16,6 +16,9 @@ class MarkdownValidationError(ValueError):
 _BLOCK_TOKENS = {
     "paragraph_open",
     "paragraph_close",
+    "heading_open",
+    "heading_close",
+    "hr",
     "inline",
     "blockquote_open",
     "blockquote_close",
