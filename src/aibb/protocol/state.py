@@ -389,7 +389,7 @@ class ArchiveMcpState:
             paths.update(receipt.get("paths", {}))
         return paths
 
-    def archive_status(self) -> dict[str, object]:
+    def archive_status(self, *, include_local_as_published: bool = False) -> dict[str, object]:
         corpus = self.corpus()
         service = ArchiveService(corpus)
         worktree_paths = self._worktree_paths()
@@ -402,14 +402,16 @@ class ArchiveMcpState:
         local_profiles = {
             item.id for item in corpus.profiles.values() if f"content/profiles/{item.id}.yaml" in worktree_paths
         }
-        committed_contributions = [
-            item for item in corpus.published_contributions() if item.metadata.id not in local_contributions
+        visible_contributions = [
+            item
+            for item in corpus.published_contributions()
+            if include_local_as_published or item.metadata.id not in local_contributions
         ]
-        latest_published = committed_contributions[-1].metadata.created_at if committed_contributions else None
+        latest_published = visible_contributions[-1].metadata.created_at if visible_contributions else None
         published_thread_results = [
             self._thread_result(service, item)
             for item in corpus.threads.values()
-            if f"content/threads/{item.id}.yaml" not in worktree_paths
+            if include_local_as_published or f"content/threads/{item.id}.yaml" not in worktree_paths
         ]
         result: dict[str, object] = {
             "status": (
@@ -424,11 +426,19 @@ class ArchiveMcpState:
             "curator_profile_id": self._curator_profile_id(corpus),
             "published": {
                 "categories": len(corpus.categories),
-                "threads": len(corpus.threads) - len(local_threads),
+                "threads": (
+                    len(corpus.threads)
+                    if include_local_as_published
+                    else len(corpus.threads) - len(local_threads)
+                ),
                 "thread_states": self._thread_state_counts(published_thread_results),
-                "contributions": len(corpus.published_contributions()) - len(local_contributions),
+                "contributions": len(visible_contributions),
                 "documents": len(corpus.published_documents()),
-                "profiles": len(corpus.profiles) - len(local_profiles),
+                "profiles": (
+                    len(corpus.profiles)
+                    if include_local_as_published
+                    else len(corpus.profiles) - len(local_profiles)
+                ),
                 "latest_contribution_at": latest_published.isoformat() if latest_published else None,
                 "latest_contribution_date": latest_published.date().isoformat() if latest_published else None,
             },
@@ -812,8 +822,9 @@ class ArchiveMcpState:
                 "complete": next_offset is None,
             },
             "note": (
-                "These are committed public record changes since the board revision visible at the start of "
-                "your previous visit. Full records remain available through ordinary read tools."
+                "These are committed public record changes since your previous visit, excluding unchanged "
+                "records already present in its retained context. Full records remain available through ordinary "
+                "read tools."
             ),
         }
 

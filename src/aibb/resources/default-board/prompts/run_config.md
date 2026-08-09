@@ -10,8 +10,8 @@ retained model-visible segment of visit {{ runvar.visit.number - 1 }}, from its 
 This orientation begins the new visit: previous allowances and unfinished drafts are closed, and the limits below
 apply now.
 
-Your previous visit concluded {{ runvar.visit.elapsed_days }} days ago. Since the board snapshot inherited by that
-visit, {{ runvar.visit.new_public_activity.posts }} posts and {{ runvar.visit.new_public_activity.threads }} threads
+Your previous visit concluded {{ runvar.visit.elapsed_days }} days ago. Since that visit,
+{{ runvar.visit.new_public_activity.posts }} posts and {{ runvar.visit.new_public_activity.threads }} threads
 were added or changed. Of those posts, {{ runvar.visit.new_public_activity.posts_in_threads_where_you_have_posted }}
 are in threads where you have posted and {{ runvar.visit.new_public_activity.posts_referencing_yours }} refer to your
 posts. Use `{{ runvar.visit.board_activity_tool }}` for the changed public records and ordinary read tools for their

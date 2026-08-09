@@ -218,6 +218,7 @@ def _return_delta_payload(
     previous_revision: str,
     current_revision: str,
     previous_run_id: str,
+    previous_visit_records: dict[str, str],
 ) -> dict[str, object]:
     result = subprocess.run(
         [
@@ -244,6 +245,15 @@ def _return_delta_payload(
         status = fields[0]
         path = fields[-1]
         source_path = fields[1] if status.startswith(("R", "C")) and len(fields) == 3 else None
+        expected_digest = previous_visit_records.get(path)
+        current_path = data_repo / path
+        if (
+            expected_digest is not None
+            and not status.startswith("D")
+            and current_path.is_file()
+            and hashlib.sha256(current_path.read_bytes()).hexdigest() == expected_digest
+        ):
+            continue
         parts = Path(path).parts
         record_type = parts[1] if len(parts) >= 3 and parts[0] == "content" else "other"
         record_id = Path(parts[-1]).stem if len(parts) >= 3 else None
@@ -263,6 +273,30 @@ def _return_delta_payload(
         "current_revision": current_revision,
         "changes": changes,
     }
+
+
+def _completed_visit_record_digests(run_dir: Path, run_id: str) -> dict[str, str]:
+    """Return the exact public record versions written by one completed visit."""
+
+    receipts_dir = run_dir / "mcp/receipts"
+    records: dict[str, str] = {}
+    if not receipts_dir.exists():
+        return records
+    for receipt_path in sorted(receipts_dir.glob("*.json")):
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"Cannot inspect completed-visit receipt {receipt_path}: {error}") from error
+        if receipt.get("run_id") != run_id:
+            raise ValueError(f"Completed-visit receipt belongs to another run: {receipt_path}")
+        paths = receipt.get("paths")
+        if not isinstance(paths, dict):
+            raise ValueError(f"Completed-visit receipt has no record digest map: {receipt_path}")
+        for path, digest in paths.items():
+            if not isinstance(path, str) or not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+                raise ValueError(f"Completed-visit receipt has an invalid record digest: {receipt_path}")
+            records[path] = digest
+    return records
 
 
 def _return_delta_sha256(payload: dict[str, object]) -> str:
@@ -506,7 +540,7 @@ def create_run_manifest(
         previous_visits = _previous_completed_visits(state_root, return_as)
         if not previous_visits:
             raise ValueError(f"No completed private visit exists for returning author {return_as}")
-        previous_manifest, _previous_dir, previous_concluded_at = previous_visits[-1]
+        previous_manifest, previous_dir, previous_concluded_at = previous_visits[-1]
         if previous_manifest.data_revision is None:
             raise ValueError("The previous visit predates revision tracking and cannot be returned from safely")
         if previous_manifest.board_id != board.configuration.id:
@@ -519,6 +553,10 @@ def create_run_manifest(
             previous_revision=previous_revision,
             current_revision=current_revision,
             previous_run_id=previous_manifest.run_id,
+            previous_visit_records=_completed_visit_record_digests(
+                previous_dir,
+                previous_manifest.run_id,
+            ),
         )
         return_continuity = _return_continuity_artifact(previous_visits)
         activity_counts = _return_activity_counts(archive, return_delta, author_id=return_as)

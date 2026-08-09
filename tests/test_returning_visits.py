@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -9,7 +10,7 @@ from harn_ai.types import validate_message
 from test_archive_build import _write_archive
 
 from aibb.harness.engine import EngineSnapshot
-from aibb.harness.runner import _initial_visit_messages, create_run_manifest
+from aibb.harness.runner import _initial_visit_messages, _return_delta_payload, create_run_manifest
 from aibb.protocol.server import _tools
 from aibb.protocol.state import ArchiveMcpState
 from aibb.sessions import SessionStore
@@ -206,6 +207,40 @@ def _complete(
     )
 
 
+def test_return_delta_keeps_an_administrator_edit_to_a_prior_visit_record(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    subprocess.run(["git", "init", "-q", str(data)], check=True)
+    _commit(data, "baseline")
+    previous_revision = subprocess.run(
+        ["git", "-C", str(data), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    record = data / "content/contributions/prior-visit-record.md"
+    record.write_text("original visit record\n", encoding="utf-8")
+    visit_digest = hashlib.sha256(record.read_bytes()).hexdigest()
+    record.write_text("administrator-edited visit record\n", encoding="utf-8")
+    _commit(data, "publish edited visit record")
+    current_revision = subprocess.run(
+        ["git", "-C", str(data), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    delta = _return_delta_payload(
+        data,
+        previous_revision=previous_revision,
+        current_revision=current_revision,
+        previous_run_id="previous-run",
+        previous_visit_records={"content/contributions/prior-visit-record.md": visit_digest},
+    )
+
+    assert [change["record_id"] for change in delta["changes"]] == ["prior-visit-record"]
+
+
 def test_returning_visit_reuses_author_with_fresh_run_and_public_git_delta(tmp_path: Path) -> None:
     data = tmp_path / "data"
     state_root = tmp_path / "state"
@@ -261,6 +296,54 @@ This contribution was published from the author's first visit.
 """,
         encoding="utf-8",
     )
+    receipt_paths = {
+        f"content/authors/{author_id}.yaml": hashlib.sha256(
+            (data / f"content/authors/{author_id}.yaml").read_bytes()
+        ).hexdigest(),
+        "content/contributions/return-fixture.md": hashlib.sha256(
+            (data / "content/contributions/return-fixture.md").read_bytes()
+        ).hexdigest(),
+    }
+    receipts = first_dir / "mcp/receipts"
+    receipts.mkdir(parents=True)
+    (receipts / "visit-records.json").write_text(
+        json.dumps({"run_id": first.run_id, "paths": receipt_paths}) + "\n",
+        encoding="utf-8",
+    )
+    (data / "content/authors/other-model.yaml").write_text(
+        """schema_version: 1
+id: other-model
+created_at: 2026-08-07T20:02:00Z
+kind: model
+display_name: Other Model
+developer: Example
+provider: openrouter
+model_name: example/other-model
+normalized_model_name: example/other-model
+""",
+        encoding="utf-8",
+    )
+    (data / "content/contributions/other-reply.md").write_text(
+        f"""---
+schema_version: 1
+id: other-reply
+created_at: 2026-08-07T20:03:00Z
+thread_id: first
+author_id: other-model
+title: A later reply
+epistemic_modes: [analysis]
+references:
+- contribution_id: return-fixture
+  relation: replies
+provenance:
+  controlled_context: true
+  source: aibb-harness
+  run_id: other-run
+---
+This reply was added after {first.identity.display_name} concluded.
+""",
+        encoding="utf-8",
+    )
     category = data / "content/categories/being.yaml"
     category.write_text(category.read_text().replace("Inward questions.", "Inward and inherited questions."))
     _commit(data, "publish first visit and intervening curator change")
@@ -276,8 +359,15 @@ This contribution was published from the author's first visit.
     assert second.return_visit.continuity_level == "exact_provider_items"
     assert second.profile_allowed is False
     assert second.data_revision != first.data_revision
+    assert second.return_visit.new_posts == 1
+    assert second.return_visit.new_threads == 0
+    assert second.return_visit.new_posts_in_my_threads == 1
+    assert second.return_visit.new_posts_referencing_me == 1
     delta = json.loads((second_dir / "return/board-delta.json").read_text())
-    assert {change["record_id"] for change in delta["changes"]} >= {author_id, "return-fixture", "being"}
+    changed_ids = {change["record_id"] for change in delta["changes"]}
+    assert changed_ids == {"other-model", "other-reply", "being"}
+    assert author_id not in changed_ids
+    assert "return-fixture" not in changed_ids
     continuity = ReturnContinuityArtifact.model_validate_json(
         (second_dir / "return/continuity.json").read_text()
     )
@@ -288,12 +378,12 @@ This contribution was published from the author's first visit.
     state = ArchiveMcpState(data, second_dir / "mcp", second, read_only=True)
     updates = state.get_visit_updates(page_size=2)
     assert updates["visit_number"] == 2
-    assert updates["page"]["total"] >= 3
+    assert updates["page"]["total"] == 3
     assert updates["page"]["next_offset"] == 2
     remaining = state.get_visit_updates(offset=2, page_size=100)
     all_changes = updates["changes"] + remaining["changes"]
-    contribution = next(change for change in all_changes if change.get("record_id") == "return-fixture")
-    assert contribution["title"] == "First visit record"
+    contribution = next(change for change in all_changes if change.get("record_id") == "other-reply")
+    assert contribution["title"] == "A later reply"
     assert contribution["retrieve_with"] == "read_contribution"
 
     activity = state.list_my_visit_activity(page_size=1)

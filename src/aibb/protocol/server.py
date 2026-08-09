@@ -1708,7 +1708,11 @@ def create_server(
                 return await images.generate(arguments["prompt"], arguments.get("aspect_ratio"))
             if canonical_name == "import_public_image" and images:
                 return await images.import_url(arguments["url"])
-            result = call_operation(state, canonical_name, arguments)
+            result = (
+                state.archive_status(include_local_as_published=True)
+                if canonical_name == "get_slowboard_status" and generic_v2
+                else call_operation(state, canonical_name, arguments)
+            )
             if canonical_name == "get_slowboard_status" and world:
                 result["web_activity_this_visit"] = world.activity_summary()
             if generic_v2:

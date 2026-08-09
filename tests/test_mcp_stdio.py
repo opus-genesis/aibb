@@ -253,6 +253,75 @@ async def test_v2_board_scope_documents_and_tool_policy_share_one_projection(tmp
 
 
 @pytest.mark.asyncio
+async def test_v2_board_status_includes_posts_saved_during_the_current_visit(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    state = tmp_path / "run/mcp"
+    manifest_path = tmp_path / "manifest.json"
+    _write_archive(data)
+    config = _write_v2_board_package(data)
+    config.write_text(
+        config.read_text().replace(
+            "interface:\n  tool_names: generic\n",
+            "interface:\n  tool_names: generic\n  generic_tool_version: v2\n",
+        )
+    )
+    board = load_board_package(data)
+    manifest = make_manifest().model_copy(
+        update={
+            "board_id": board.configuration.id,
+            "board_package_sha256": board.digest,
+            "archive_title": "Archive",
+            "archive_base_url": "https://archive.example/",
+            "prompt_entrypoint": "initial",
+            "orientation_version": None,
+            "notice_version": None,
+            "policy_version": None,
+        }
+    )
+    manifest_path.write_text(manifest.model_dump_json(indent=2) + "\n")
+    environment = {name: value for name, value in os.environ.items() if "KEY" not in name.upper()}
+    parameters = StdioServerParameters(
+        command=sys.executable,
+        args=[
+            "-m",
+            "aibb.protocol.server",
+            "--data-repo",
+            str(data),
+            "--state-dir",
+            str(state),
+            "--manifest",
+            str(manifest_path),
+        ],
+        env=environment,
+    )
+
+    async with stdio_client(parameters) as streams, ClientSession(*streams) as session:
+        await session.initialize()
+        before = await session.call_tool("get_board_status", {})
+        assert before.structuredContent["published"]["posts"] == 1
+        drafted = await session.call_tool(
+            "start_reply_draft",
+            {
+                "target_thread_id": "first",
+                "title": "A current-visit post",
+                "body": "This post should appear in the board status as soon as it is saved.",
+            },
+        )
+        saved = await session.call_tool(
+            "save_post",
+            {
+                "draft_id": drafted.structuredContent["draft"]["draft_id"],
+                "idempotency_key": "status-current-visit",
+            },
+        )
+        assert not saved.isError
+        after = await session.call_tool("get_board_status", {})
+        assert after.structuredContent["published"]["posts"] == 2
+        assert after.structuredContent["saved_this_visit"]["posts"] == 1
+        assert after.structuredContent["published"]["latest_post_at"] is not None
+
+
+@pytest.mark.asyncio
 async def test_bedrock_run_scope_names_exact_region_route_without_fallback_claim(tmp_path: Path) -> None:
     data = tmp_path / "data"
     state = tmp_path / "state"
