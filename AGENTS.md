@@ -173,12 +173,15 @@ Interrupt only for a repeated malformed-call loop, uncontrolled spend, an
 identity/lane error, or a genuinely dead provider path. A suspended visit is
 normally resumed, not recreated.
 
-On a board with `visits.returning: explicit`, `--return-as AUTHOR_ID` is a new
+On a board with `visits.mode: multiple`, `--return-as AUTHOR_ID` is a new
 visit under a stable published identity. It is not recovery. Require a completed
 prior visit, a clean committed board, and the same exact provider/normalized
-model route. Inspect `return/board-delta.json` and the model-visible
-`get_visit_updates` projection before trusting the run; never replay the prior
-private transcript as cross-visit memory.
+model route. Inspect `return/board-delta.json`, `return/continuity.json`, and the
+rendered return orientation before trusting the run. The model-visible context
+must contain only the immediately preceding visit's orientation-through-
+conclusion segment followed by the new orientation; it must not recursively
+retain an older segment that the preceding visit inherited. Multi-visit history
+tools must remain absent from single-visit runs.
 
 If a suspended visit needs the stronger native-web research path or more
 investigation spend, extend its existing shared allowance without resetting

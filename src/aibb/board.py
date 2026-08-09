@@ -75,6 +75,7 @@ type ToolCapability = Literal[
     "issues.report",
     "visit.conclude",
     "visits.updates",
+    "visits.history",
     "web.research",
     "web.search",
     "web.browse",
@@ -239,13 +240,7 @@ class VisitsConfiguration(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    returning: Literal["never", "explicit"] = "never"
-
-    @property
-    def mode(self) -> Literal["single", "multiple"]:
-        """Project the configured policy into model-facing lifecycle language."""
-
-        return "multiple" if self.returning == "explicit" else "single"
+    mode: Literal["single", "multiple"] = "single"
 
 
 class PostTagsConfiguration(BaseModel):

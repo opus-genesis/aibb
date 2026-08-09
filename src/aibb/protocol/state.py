@@ -36,6 +36,7 @@ from aibb.markdown import (
 from aibb.protocol.images import ImageCapabilityError, load_staged_image
 from aibb.runtime import BudgetLedger, RunManifest
 from aibb.runtime.budget import Usage
+from aibb.visits import ReturnContinuityArtifact, canonical_sha256
 
 
 class McpDomainError(ValueError):
@@ -299,7 +300,11 @@ class ArchiveMcpState:
             "consumes_contribution_quota": False,
         }
 
-    def conclude_visit(self) -> dict[str, object]:
+    def conclude_visit(self, closing_note: str | None = None) -> dict[str, object]:
+        if closing_note is not None:
+            closing_note = closing_note.strip()
+            if not closing_note or len(closing_note) > 4000:
+                raise McpDomainError("A closing note must contain 1 to 4000 characters")
         if self.conclusion_path.exists():
             self.read_only = True
             return json.loads(self.conclusion_path.read_text(encoding="utf-8"))
@@ -314,11 +319,16 @@ class ArchiveMcpState:
                 "public_changes": False,
                 "consumes_contribution_quota": False,
             }
+            if closing_note is not None:
+                payload["closing_note"] = closing_note
+                payload["closing_note_visibility"] = "private_visit_history"
             _atomic_text(
                 self.conclusion_pending_path,
                 json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             )
             return payload
+        pending = json.loads(self.conclusion_pending_path.read_text(encoding="utf-8"))
+        retained_note = closing_note or pending.get("closing_note")
         payload = {
             "schema_version": 1,
             "run_id": self.manifest.run_id,
@@ -327,6 +337,9 @@ class ArchiveMcpState:
             "public_changes": False,
             "consumes_contribution_quota": False,
         }
+        if isinstance(retained_note, str):
+            payload["closing_note"] = retained_note
+            payload["closing_note_visibility"] = "private_visit_history"
         _atomic_text(
             self.conclusion_path,
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -803,6 +816,76 @@ class ArchiveMcpState:
                 "your previous visit. Full records remain available through ordinary read tools."
             ),
         }
+
+    def _return_continuity(self) -> ReturnContinuityArtifact:
+        returning = self.manifest.return_visit
+        if returning is None:
+            raise McpDomainError("Visit history is available only during a returning visit")
+        artifact_path = self.state_dir.parent / returning.continuity_artifact
+        try:
+            artifact = ReturnContinuityArtifact.model_validate_json(
+                artifact_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as error:
+            raise McpDomainError("The private visit-history artifact is unavailable or malformed") from error
+        if (
+            artifact.previous_run_id != returning.previous_run_id
+            or canonical_sha256(artifact) != returning.continuity_sha256
+        ):
+            raise McpDomainError("The private visit-history artifact does not match this run")
+        return artifact
+
+    def list_my_visit_activity(
+        self,
+        visit_number: int | None = None,
+        offset: int = 0,
+        page_size: int = 20,
+    ) -> dict[str, object]:
+        """Return thin metadata for model-visible tool activity in one earlier visit."""
+
+        if offset < 0 or not 1 <= page_size <= 100:
+            raise McpDomainError("Visit-history pagination requires offset >= 0 and page_size between 1 and 100")
+        artifact = self._return_continuity()
+        selected_number = visit_number or artifact.previous_visit_number
+        visit = next(
+            (item for item in artifact.visits if item.visit_number == selected_number),
+            None,
+        )
+        if visit is None:
+            available = [item.visit_number for item in artifact.visits]
+            raise McpDomainError(
+                f"Unknown prior visit {selected_number}; available visit numbers: {available}"
+            )
+        total = len(visit.events)
+        end = min(total, offset + page_size)
+        return {
+            "visit": {
+                "number": visit.visit_number,
+                "started_at": visit.started_at.isoformat(),
+                "concluded_at": visit.concluded_at.isoformat(),
+            },
+            "page": {
+                "offset": offset,
+                "returned": max(0, end - offset),
+                "total": total,
+                "next_offset": end if end < total else None,
+            },
+            "events": [event.listing() for event in visit.events[offset:end]],
+            "retrieve_event_with": "read_my_visit_event(event_id)",
+        }
+
+    def read_my_visit_event(self, event_id: str) -> dict[str, object]:
+        """Expand one metadata event to its original model-visible tool exchange."""
+
+        artifact = self._return_continuity()
+        for visit in artifact.visits:
+            for event in visit.events:
+                if event.event_id == event_id:
+                    return {
+                        "visit_number": visit.visit_number,
+                        **event.model_dump(mode="json", exclude_none=True),
+                    }
+        raise McpDomainError(f"Unknown prior visit event: {event_id}")
 
     def _contribution_result(
         self,

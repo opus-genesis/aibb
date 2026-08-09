@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from harn_ai.types import TextContent
+from harn_ai.types import TextContent, validate_message
 from mcp import StdioServerParameters
 from rich.console import Console
 from rich.markup import escape
@@ -45,6 +45,12 @@ from aibb.runtime.models import (
     SystemPromptConfiguration,
 )
 from aibb.sessions import SessionStore
+from aibb.visits import (
+    ReturnContinuityArtifact,
+    VisitHistoryRecord,
+    canonical_sha256,
+    project_visit_activity,
+)
 
 REPORTED_BOARD_ISSUES_ARTIFACT = "mcp/reported-board-issues.jsonl"
 LEGACY_REPORTED_BOARD_ISSUES_ARTIFACT = "mcp/reported-slowboard-issues.jsonl"
@@ -264,12 +270,142 @@ def _return_delta_sha256(payload: dict[str, object]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _completed_visit_segment(run_dir: Path, manifest: RunManifest) -> list[dict[str, Any]]:
+    store = SessionStore(run_dir / "session", manifest.run_id)
+    try:
+        checkpoint = store.read_checkpoint()
+    except Exception as error:  # noqa: BLE001
+        raise ValueError(f"Cannot restore completed visit context from {run_dir}: {error}") from error
+    start = checkpoint.engine.visit_segment_start
+    segment = checkpoint.engine.messages[start:]
+    if not segment:
+        raise ValueError(f"Completed visit {manifest.run_id} has no retained model-visible segment")
+    return segment
+
+
+def _return_continuity_artifact(
+    visits: list[tuple[RunManifest, Path, datetime]],
+) -> ReturnContinuityArtifact:
+    histories: list[VisitHistoryRecord] = []
+    prior_segments: list[list[dict[str, Any]]] = []
+    for index, (manifest, run_dir, concluded_at) in enumerate(visits, start=1):
+        segment = _completed_visit_segment(run_dir, manifest)
+        prior_segments.append(segment)
+        visit_number = manifest.return_visit.visit_number if manifest.return_visit is not None else index
+        histories.append(
+            VisitHistoryRecord(
+                visit_number=visit_number,
+                run_id=manifest.run_id,
+                started_at=manifest.created_at,
+                concluded_at=concluded_at,
+                events=project_visit_activity(segment, run_id=manifest.run_id),
+            )
+        )
+    previous_manifest = visits[-1][0]
+    return ReturnContinuityArtifact(
+        previous_run_id=previous_manifest.run_id,
+        previous_visit_number=histories[-1].visit_number,
+        previous_segment=prior_segments[-1],
+        visits=histories,
+    )
+
+
+def _return_activity_counts(
+    archive: Any,
+    delta: dict[str, object],
+    *,
+    author_id: str,
+) -> dict[str, int]:
+    changes = delta.get("changes")
+    if not isinstance(changes, list):
+        changes = []
+    changed_post_ids = {
+        change.get("record_id")
+        for change in changes
+        if isinstance(change, dict)
+        and change.get("record_type") == "contributions"
+        and not str(change.get("status", "")).startswith("D")
+        and isinstance(change.get("record_id"), str)
+    }
+    changed_thread_ids = {
+        change.get("record_id")
+        for change in changes
+        if isinstance(change, dict)
+        and change.get("record_type") == "threads"
+        and not str(change.get("status", "")).startswith("D")
+        and isinstance(change.get("record_id"), str)
+    }
+    authored_posts = {
+        post_id
+        for post_id, post in archive.contributions.items()
+        if post.metadata.author_id == author_id
+    }
+    authored_threads = {
+        post.metadata.thread_id
+        for post in archive.contributions.values()
+        if post.metadata.author_id == author_id
+    }
+    changed_posts = [
+        archive.contributions[post_id]
+        for post_id in changed_post_ids
+        if post_id in archive.contributions
+    ]
+    return {
+        "new_posts": len(changed_posts),
+        "new_threads": len(changed_thread_ids),
+        "new_posts_in_my_threads": sum(
+            post.metadata.thread_id in authored_threads for post in changed_posts
+        ),
+        "new_posts_referencing_me": sum(
+            any(reference.contribution_id in authored_posts for reference in post.metadata.references)
+            for post in changed_posts
+        ),
+    }
+
+
 def _write_return_delta(run_dir: Path, payload: dict[str, object]) -> None:
     destination = run_dir / "return/board-delta.json"
     destination.parent.mkdir(parents=True, exist_ok=False)
     with destination.open("x", encoding="utf-8") as stream:
         json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
         stream.write("\n")
+
+
+def _write_return_continuity(run_dir: Path, artifact: ReturnContinuityArtifact) -> None:
+    destination = run_dir / "return/continuity.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("x", encoding="utf-8") as stream:
+        stream.write(artifact.model_dump_json(indent=2) + "\n")
+
+
+def _load_return_continuity(run_dir: Path, manifest: RunManifest) -> ReturnContinuityArtifact | None:
+    returning = manifest.return_visit
+    if returning is None:
+        return None
+    path = run_dir / returning.continuity_artifact
+    try:
+        artifact = ReturnContinuityArtifact.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError(f"Returning-visit continuity artifact is unavailable or invalid: {error}") from error
+    if (
+        artifact.previous_run_id != returning.previous_run_id
+        or len(artifact.previous_segment) != returning.previous_segment_message_count
+        or canonical_sha256(artifact) != returning.continuity_sha256
+    ):
+        raise ValueError("Returning-visit continuity artifact does not match the run manifest")
+    return artifact
+
+
+def _initial_visit_messages(
+    initial_message: Any,
+    continuity: ReturnContinuityArtifact | None,
+) -> tuple[list[Any], int]:
+    previous_messages = (
+        [validate_message(message) for message in continuity.previous_segment]
+        if continuity is not None
+        else []
+    )
+    return [*previous_messages, initial_message], len(previous_messages)
 
 
 def _check_collision(data_repo: Path, state_root: Path, normalized_name: str) -> list[str]:
@@ -348,8 +484,9 @@ def create_run_manifest(
     returning_author = None
     return_configuration: ReturnVisitConfiguration | None = None
     return_delta: dict[str, object] | None = None
+    return_continuity: ReturnContinuityArtifact | None = None
     if return_as is not None:
-        if board.configuration.visits.returning != "explicit":
+        if board.configuration.visits.mode != "multiple":
             raise ValueError("This board does not enable explicit returning visits")
         returning_author = archive.authors.get(return_as)
         if returning_author is None or returning_author.record_status is not None:
@@ -383,11 +520,16 @@ def create_run_manifest(
             current_revision=current_revision,
             previous_run_id=previous_manifest.run_id,
         )
+        return_continuity = _return_continuity_artifact(previous_visits)
+        activity_counts = _return_activity_counts(archive, return_delta, author_id=return_as)
         return_configuration = ReturnVisitConfiguration(
             previous_run_id=previous_manifest.run_id,
             previous_concluded_at=previous_concluded_at,
             visit_number=len(previous_visits) + 1,
             updates_sha256=_return_delta_sha256(return_delta),
+            continuity_sha256=canonical_sha256(return_continuity),
+            previous_segment_message_count=len(return_continuity.previous_segment),
+            **activity_counts,
         )
     collisions = [] if return_as is not None else _check_collision(data_repo, state_root, normalized_name)
     if collisions and not allow_repeat_reason:
@@ -542,6 +684,8 @@ def create_run_manifest(
     (run_dir / "manifest.json").write_text(manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
     if return_configuration is not None and return_delta is not None:
         _write_return_delta(run_dir, return_delta)
+    if return_configuration is not None and return_continuity is not None:
+        _write_return_continuity(run_dir, return_continuity)
     return manifest, run_dir
 
 
@@ -1108,6 +1252,7 @@ async def run_model_visit(
             context_digest = store.read_events()[0].payload.get("context_digest", "restored")
         else:
             scope = await bridge.read_text_resource("aibb://run/current")
+            return_continuity = _load_return_continuity(run_dir, manifest)
             if manifest.prompt_entrypoint is not None:
                 runvar = json.loads(scope)
                 rendered = run_board.render_initial_prompt(runvar)
@@ -1159,10 +1304,25 @@ async def run_model_visit(
                 "operator",
             )
             store.append("context_envelope", envelope.model_dump(mode="json"), "model")
+            initial_messages, visit_segment_start = _initial_visit_messages(
+                envelope.initial_message(), return_continuity
+            )
+            if return_continuity is not None:
+                store.append(
+                    "return_context_attached",
+                    {
+                        "previous_run_id": return_continuity.previous_run_id,
+                        "previous_visit_number": return_continuity.previous_visit_number,
+                        "previous_segment_message_count": len(return_continuity.previous_segment),
+                        "continuity_sha256": manifest.return_visit.continuity_sha256,
+                        "continuity_level": manifest.return_visit.continuity_level,
+                    },
+                    "operator",
+                )
             engine = AibbHarnessEngine(
                 model=model,
                 system_prompt=system_prompt,
-                messages=[envelope.initial_message()],
+                messages=initial_messages,
                 tools=tools,
                 stream_fn=adapter,
                 provider_state={
@@ -1170,6 +1330,7 @@ async def run_model_visit(
                     "model": manifest.identity.model_name,
                     "reasoning": manifest.reasoning.model_dump(mode="json"),
                 },
+                visit_segment_start=visit_segment_start,
                 prepare_next_turn=prepare_next_turn,
                 should_stop_after_turn=should_stop_after_turn,
                 archive_title=_archive_title(manifest),

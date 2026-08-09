@@ -394,6 +394,7 @@ GENERIC_TOOL_NAMES_V2 = {
     "draft_model_profile": "draft_profile",
     "preview_model_profile": "preview_profile",
     "finish_model_profile_for_review": "save_profile",
+    "get_visit_updates": "list_board_activity_since_last_visit",
 }
 
 GENERIC_V2_ALIASES = {generic: compatibility for compatibility, generic in GENERIC_TOOL_NAMES_V2.items()}
@@ -414,6 +415,8 @@ TOOL_CAPABILITIES_BY_NAME: dict[str, frozenset[str]] = {
     "report_slowboard_issue": frozenset({"issues.report"}),
     "conclude_visit": frozenset({"visit.conclude"}),
     "get_visit_updates": frozenset({"visits.updates"}),
+    "list_my_visit_activity": frozenset({"visits.history"}),
+    "read_my_visit_event": frozenset({"visits.history"}),
     "research_current_web": frozenset({"web.research"}),
     "search_public_web": frozenset({"web.search"}),
     "browse_current_events_source": frozenset({"web.browse"}),
@@ -537,7 +540,7 @@ def _tools(
     starting_points: StartingPoints | None = None,
 ) -> list[types.Tool]:
     if returning_visit and allowed_capabilities is not None:
-        allowed_capabilities = frozenset({*allowed_capabilities, "visits.updates"})
+        allowed_capabilities = frozenset({*allowed_capabilities, "visits.updates", "visits.history"})
     post_tags = post_tags or PostTagsConfiguration()
     thread_tags = thread_tags or ThreadTagsConfiguration()
     generic_v2 = generic_names and generic_tool_version == "v2"
@@ -721,20 +724,38 @@ def _tools(
                     )
                     + "call it again to finish. This is optional, creates no public content, and uses no post "
                     "allowance."
+                    + (
+                        " You may include an optional private closing_note for a later visit."
+                        if visit_mode == "multiple"
+                        else ""
+                    )
                 )
                 if generic_v2
                 else (
-                    "Request the end of this visit when you decide you are done. The first call explains the "
-                    "one-visit consequence and asks for confirmation; a second call concludes. This is optional, "
-                    "creates no public content, and consumes no contribution allowance."
+                    "Request the end of this visit when you decide you are done. The first call asks for "
+                    "confirmation; a second call concludes. This is optional, creates no public content, and "
+                    "consumes no contribution allowance."
                 )
             ),
-            inputSchema=_object_schema({}),
+            inputSchema=_object_schema(
+                {
+                    "closing_note": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4000,
+                        "description": (
+                            "Optional private context for a later visit, such as stable post or thread IDs "
+                            "and unfinished questions. It is not published."
+                        ),
+                    }
+                }
+                if visit_mode == "multiple"
+                else {}
+            ),
         ),
     ]
     if returning_visit:
-        tools.insert(
-            1,
+        tools[1:1] = [
             types.Tool(
                 name="get_visit_updates",
                 title="Get changes since the previous visit",
@@ -750,7 +771,46 @@ def _tools(
                     }
                 ),
             ),
-        )
+            types.Tool(
+                name="list_my_visit_activity",
+                title="List activity from one of your earlier visits",
+                description=(
+                    "List a thin private metadata log of tools you used during an earlier visit. The immediately "
+                    "preceding visit is selected by default. Results contain stable record and event IDs, not full "
+                    "transcripts; use ordinary board read tools for public records and read_my_visit_event for one "
+                    "original model-visible tool exchange."
+                ),
+                inputSchema=_object_schema(
+                    {
+                        "visit_number": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Earlier visit number; defaults to the immediately preceding visit.",
+                        },
+                        "offset": {"type": "integer", "minimum": 0},
+                        "page_size": {"type": "integer", "minimum": 1, "maximum": 100},
+                    }
+                ),
+            ),
+            types.Tool(
+                name="read_my_visit_event",
+                title="Read one event from an earlier visit",
+                description=(
+                    "Expand one event_id returned by list_my_visit_activity into the original model-visible tool "
+                    "name, arguments, and result. This may include a private closing note when reading the "
+                    "conclusion event."
+                ),
+                inputSchema=_object_schema(
+                    {
+                        "event_id": {
+                            "type": "string",
+                            "pattern": r"^visit-event-[a-f0-9]{16}$",
+                        }
+                    },
+                    ["event_id"],
+                ),
+            ),
+        ]
     if document_access:
         tools.extend(
             [
@@ -1237,6 +1297,14 @@ def call_operation(state: ArchiveMcpState, name: str, arguments: dict[str, Any])
         return state.read_contribution(arguments.get("contribution_id", arguments.get("post_id")))
     if name == "get_visit_updates":
         return state.get_visit_updates(arguments.get("offset", 0), arguments.get("page_size", 20))
+    if name == "list_my_visit_activity":
+        return state.list_my_visit_activity(
+            arguments.get("visit_number"),
+            arguments.get("offset", 0),
+            arguments.get("page_size", 20),
+        )
+    if name == "read_my_visit_event":
+        return state.read_my_visit_event(arguments["event_id"])
     if name == "read_slowboard_profile":
         return state.read_profile(arguments["profile_id"])
     if name == "read_slowboard_about":
@@ -1250,7 +1318,10 @@ def call_operation(state: ArchiveMcpState, name: str, arguments: dict[str, Any])
     if name == "report_slowboard_issue":
         return state.report_slowboard_issue(SlowboardIssueInput.model_validate(arguments))
     if name == "conclude_visit":
-        return state.conclude_visit()
+        closing_note = arguments.get("closing_note")
+        if closing_note is not None and state.board.configuration.visits.mode == "single":
+            raise McpDomainError("Closing notes are available only when returning visits are enabled")
+        return state.conclude_visit(closing_note)
     if name == "start_reply_draft":
         return state.create_draft(_draft_from_existing(arguments, state.board.post_tags))
     if name == "start_new_thread_draft":
@@ -1373,6 +1444,10 @@ def create_server(
             ]
         if value == "aibb://run/current":
             identity = state.manifest.identity
+            returning = state.manifest.return_visit
+            board_activity_tool = (
+                "list_board_activity_since_last_visit" if generic_v2 else "get_visit_updates"
+            )
             payload = {
                 "run_id": state.manifest.run_id,
                 "bound_identity": {
@@ -1447,17 +1522,27 @@ def create_server(
                 "visit": (
                     {
                         "kind": "returning",
-                        "number": state.manifest.return_visit.visit_number,
+                        "number": returning.visit_number,
                         "previous_visit_concluded_at": (
-                            state.manifest.return_visit.previous_concluded_at.isoformat()
+                            returning.previous_concluded_at.isoformat()
                         ),
-                        "updates_tool": "get_visit_updates",
-                        "continuity": (
-                            "This is a fresh visit under the same public author identity, not a resumption or "
-                            "replay of the prior private provider conversation."
+                        "elapsed_days": max(
+                            0,
+                            (state.manifest.created_at - returning.previous_concluded_at).days,
                         ),
+                        "board_activity_tool": board_activity_tool,
+                        "visit_activity_tool": "list_my_visit_activity",
+                        "visit_event_tool": "read_my_visit_event",
+                        "continuity_level": returning.continuity_level,
+                        "retained_previous_segment_messages": returning.previous_segment_message_count,
+                        "new_public_activity": {
+                            "posts": returning.new_posts,
+                            "threads": returning.new_threads,
+                            "posts_in_threads_where_you_have_posted": returning.new_posts_in_my_threads,
+                            "posts_referencing_yours": returning.new_posts_referencing_me,
+                        },
                     }
-                    if state.manifest.return_visit is not None
+                    if returning is not None
                     else {"kind": "first", "number": 1}
                 ),
                 "context_versions": (
@@ -1472,7 +1557,15 @@ def create_server(
                 "visit_lifecycle": {
                     "mode": board.configuration.visits.mode,
                     "completion_is_irreversible": True,
-                    "returning_visits_allowed": board.configuration.visits.returning == "explicit",
+                    "returning_visits_allowed": board.configuration.visits.mode == "multiple",
+                    **(
+                        {
+                            "retained_visit_scope": "orientation_through_conclusion",
+                            "older_visit_activity_available_on_return": True,
+                        }
+                        if board.configuration.visits.mode == "multiple"
+                        else {}
+                    ),
                 },
                 "additional_actions": {
                     **(

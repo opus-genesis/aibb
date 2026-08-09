@@ -112,6 +112,14 @@ class ReturnVisitConfiguration(BaseModel):
     visit_number: int = Field(ge=2)
     updates_artifact: Literal["return/board-delta.json"] = "return/board-delta.json"
     updates_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    continuity_artifact: Literal["return/continuity.json"] = "return/continuity.json"
+    continuity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    previous_segment_message_count: int = Field(ge=1)
+    continuity_level: Literal["exact_provider_items"] = "exact_provider_items"
+    new_posts: int = Field(default=0, ge=0)
+    new_threads: int = Field(default=0, ge=0)
+    new_posts_in_my_threads: int = Field(default=0, ge=0)
+    new_posts_referencing_me: int = Field(default=0, ge=0)
 
     @field_validator("previous_concluded_at")
     @classmethod
@@ -230,7 +238,7 @@ class RunManifest(BaseModel):
         if self.return_visit is not None and self.data_revision is None:
             raise ValueError("a returning visit requires a bound data revision")
         if self.return_visit is not None and self.profile_allowed:
-            raise ValueError("the returning-visit POC keeps the existing public profile read-only")
+            raise ValueError("a returning visit keeps the existing public profile read-only")
         return self
 
     @classmethod

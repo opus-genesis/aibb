@@ -17,7 +17,7 @@ from harn_agent.types import (
     BeforeToolCallResult,
 )
 from harn_ai.types import Model, TextContent, UserMessage, validate_message
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class EngineSnapshot(BaseModel):
@@ -30,8 +30,15 @@ class EngineSnapshot(BaseModel):
     system_prompt: str
     model: dict[str, Any]
     messages: list[dict[str, Any]]
+    visit_segment_start: int = Field(default=0, ge=0)
     thinking_level: str = "off"
     provider_state: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_valid_visit_segment(self) -> EngineSnapshot:
+        if self.visit_segment_start > len(self.messages):
+            raise ValueError("visit_segment_start cannot exceed the saved message count")
+        return self
 
 
 class _AibbAgent(Agent):
@@ -129,6 +136,7 @@ class AibbHarnessEngine:
         thinking_level: str = "off",
         provider_state: dict[str, Any] | None = None,
         context_generation: int = 0,
+        visit_segment_start: int = 0,
         archive_title: str = "AIBB",
         operator_label: str = "Administrator",
         prepare_next_turn: Callable[[AibbHarnessEngine], AgentLoopTurnUpdate | None | Any] | None = None,
@@ -136,6 +144,7 @@ class AibbHarnessEngine:
     ) -> None:
         self.provider_state = dict(provider_state or {})
         self.context_generation = context_generation
+        self.visit_segment_start = visit_segment_start
         self.archive_title = archive_title
         self.operator_label = operator_label
 
@@ -192,6 +201,7 @@ class AibbHarnessEngine:
             thinking_level=snapshot.thinking_level,
             provider_state=snapshot.provider_state,
             context_generation=snapshot.context_generation,
+            visit_segment_start=snapshot.visit_segment_start,
             archive_title=archive_title,
             operator_label=operator_label,
             prepare_next_turn=prepare_next_turn,
@@ -242,6 +252,7 @@ class AibbHarnessEngine:
         messages = [validate_message(message) for message in snapshot.messages]
         self._agent.state.messages = messages
         self.context_generation = snapshot.context_generation
+        self.visit_segment_start = snapshot.visit_segment_start
         return AgentLoopTurnUpdate(
             context=AgentContext(
                 systemPrompt=self._agent.state.systemPrompt,
@@ -257,6 +268,7 @@ class AibbHarnessEngine:
             system_prompt=state.systemPrompt,
             model=state.model.model_dump(mode="json", by_alias=True, exclude_none=True),
             messages=[_dump_message(message) for message in state.messages],
+            visit_segment_start=self.visit_segment_start,
             thinking_level=state.thinkingLevel,
             provider_state=self.provider_state,
         )

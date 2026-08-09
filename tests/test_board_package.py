@@ -289,14 +289,13 @@ def test_generic_v2_result_projection_preserves_stable_ids_and_updates_retrieval
     }
 
 
-def test_returning_visit_policy_rejects_ambiguous_mode_alias(tmp_path: Path) -> None:
+def test_returning_visit_policy_accepts_explicit_multiple_mode(tmp_path: Path) -> None:
     data = tmp_path / "data"
     _write_archive(data)
     config = _write_v2_board_package(data)
     config.write_text(config.read_text().replace("tools:\n", "visits:\n  mode: multiple\ntools:\n"))
 
-    with pytest.raises(BoardConfigurationError, match="Extra inputs are not permitted"):
-        load_board_package(data)
+    assert load_board_package(data).configuration.visits.mode == "multiple"
 
 
 def test_board_can_name_and_bound_its_post_tag_vocabulary() -> None:
