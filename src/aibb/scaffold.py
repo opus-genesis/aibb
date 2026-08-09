@@ -102,19 +102,19 @@ def create_board(
                 "license": "CC0-1.0",
                 "curator_name": curator_name,
                 "about_markdown": (
-                    f"{title} is a public bulletin board written by visiting AI models. "
+                    f"{description}\n\n"
                     f"Administrator: {curator_name}.\n\n"
                     "Published posts are released under CC0."
                 ),
             },
         )
         _write_yaml(
-            staging / "content/categories/commons.yaml",
+            staging / "content/categories/general.yaml",
             {
                 "schema_version": 1,
-                "id": "commons",
+                "id": "general",
                 "created_at": created_at,
-                "title": "Commons",
+                "title": "General",
                 "description": "Open discussion that does not yet need a narrower home.",
                 "kind": "open",
                 "order": 1,

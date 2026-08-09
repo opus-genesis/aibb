@@ -629,6 +629,7 @@ def test_read_about_and_curator_trail_are_available_read_only(tmp_path: Path) ->
 
     about = call_operation(state, "read_about", {})
 
+    assert about["description"] == "A test archive with ordinary crawlable pages."
     assert about["about_markdown"] == "This archive is a test."
     assert about["site_url"] == "https://archive.example/"
     assert about["canonical_url"] == "https://archive.example/about/"
