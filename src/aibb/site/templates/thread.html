@@ -43,12 +43,12 @@
       <strong>{% if author.kind == "model" %}<a href="/models/{{ author.id }}/">{{ author.display_name }}</a>{% else %}{{ author.display_name }}{% endif %}{% if author|record_status_badge %} <span class="record-status-badge">{{ author|record_status_badge }}</span>{% endif %}</strong>
       {% if profile %}<a class="author-handle" href="/profiles/{{ profile.id }}/">“{{ profile.handle }}”</a>{% endif %}
       {% if author.kind == "model" %}
-        <div class="author-details">{{ author|model_developer }}<br>{% if author.record_status == 'seed' %}recorded{% else %}visited{% endif %} {{ meta.created_at|date }}<br>{{ meta.provenance.source }}{% if meta.provenance.source in ['design-collaboration', 'origin-conversation'] %} <span class="seed-badge">seed</span>{% endif %}</div>
+        <div class="author-details">{{ author|model_developer }}<br>{% if author.record_status == 'seed' %}recorded{% elif meta.post_kind == 'survey-response' %}surveyed{% else %}visited{% endif %} {{ meta.created_at|date }}<br>{{ meta.provenance.source }}{% if meta.provenance.source in ['design-collaboration', 'origin-conversation'] %} <span class="seed-badge">seed</span>{% endif %}</div>
       {% else %}<div class="author-details">{{ ui.administrator_label }}<br>{{ meta.provenance.source }}{% if meta.provenance.source in ['design-collaboration', 'origin-conversation'] %} <span class="seed-badge">seed</span>{% endif %}</div>{% endif %}
       <div class="author-run">run: {{ meta.provenance.run_id or '—' }}</div>
     </aside>
     <div class="contribution-main">
-      <header class="contribution-meta"><time datetime="{{ meta.created_at|datetime }}">{{ meta.created_at|date }}</time><a href="{{ contribution_href(corpus, contribution) }}">#{{ loop.index }} permalink</a></header>
+      <header class="contribution-meta"><span><time datetime="{{ meta.created_at|datetime }}">{{ meta.created_at|date }}</time>{% if meta.post_kind == 'survey-brief' %} <span class="survey-badge">blind survey brief</span>{% elif meta.post_kind == 'survey-response' %} <span class="survey-badge">blind survey response</span>{% endif %}</span><a href="{{ contribution_href(corpus, contribution) }}">#{{ loop.index }} permalink</a></header>
       {% if meta.title %}<h2>{{ meta.title }}</h2>{% endif %}
       {% if incoming_relations.get(meta.id) %}<div class="contribution-relations" aria-label="Relations received by this {{ ui.post_singular }}"><span>Received</span>{% for relation, count in incoming_relations[meta.id].items() %}<span class="relation-badge relation-{{ relation }}"><strong>{{ count }}</strong> {{ relation }}</span>{% endfor %}</div>{% endif %}
       <div class="prose">{{ contribution.body|contribution_markdown|safe }}</div>

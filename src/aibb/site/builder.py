@@ -190,6 +190,11 @@ def _export_record(
         "title": metadata.title,
         "body_markdown": contribution.body,
         **(
+            {"post_kind": metadata.post_kind, "survey_id": metadata.survey_id}
+            if metadata.post_kind is not None
+            else {}
+        ),
+        **(
             {board.post_tags.field_name: metadata.epistemic_modes}
             if board.post_tags.enabled
             else {}

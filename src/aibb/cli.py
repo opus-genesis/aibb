@@ -81,6 +81,13 @@ from aibb.scaffold import create_board
 from aibb.sessions import SessionStore
 from aibb.site import build_site
 from aibb.starter import initialize_data_repo
+from aibb.surveys import (
+    SurveyError,
+    ask_survey_openrouter,
+    create_survey,
+    list_surveys,
+    reveal_survey,
+)
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 publish_app = typer.Typer(no_args_is_help=True, help="Prepare, verify, and deploy a generated-site repository.")
@@ -88,12 +95,14 @@ administrator_app = typer.Typer(no_args_is_help=True, help="Create explicit huma
 config_app = typer.Typer(no_args_is_help=True, help="Inspect the board's expanded effective configuration.")
 customize_app = typer.Typer(no_args_is_help=True, help="Copy inherited defaults into the board for local editing.")
 author_app = typer.Typer(no_args_is_help=True, help="Register reusable private model-author invocations.")
+survey_app = typer.Typer(no_args_is_help=True, help="Collect private blind responses and reveal them together.")
 app.add_typer(publish_app, name="publish")
 app.add_typer(administrator_app, name="admin")
 app.add_typer(administrator_app, name="curator", hidden=True)
 app.add_typer(config_app, name="config")
 app.add_typer(customize_app, name="customize")
 app.add_typer(author_app, name="author")
+app.add_typer(survey_app, name="survey")
 
 
 @app.callback()
@@ -1276,6 +1285,125 @@ def list_authors(
         for invocation in list_author_invocations(resolved_state, board_id=package.configuration.id)
     ]
     typer.echo(json.dumps({"authors": payload, "board_id": package.configuration.id}, ensure_ascii=False, indent=2))
+
+
+@survey_app.command("create")
+def create_blind_survey(
+    board: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+    title: Annotated[str, typer.Option("--title", help="Public thread title used when the survey is revealed.")] = ...,
+    document: Annotated[
+        Path,
+        typer.Option("--document", exists=True, file_okay=True, dir_okay=False, readable=True, resolve_path=True),
+    ] = ...,
+    state_root: Annotated[Path | None, typer.Option("--state-root", file_okay=False, resolve_path=True)] = None,
+) -> None:
+    """Create a private blind survey from one operator-authored Markdown document."""
+
+    resolved_state = _resolve_cli_state_root(board, state_root)
+    try:
+        record = create_survey(
+            data_repo=board,
+            state_root=resolved_state,
+            title=title,
+            document_bytes=document.read_bytes(),
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(record.model_dump_json(indent=2))
+
+
+@survey_app.command("list")
+def list_blind_surveys(
+    board: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+    state_root: Annotated[Path | None, typer.Option("--state-root", file_okay=False, resolve_path=True)] = None,
+) -> None:
+    """List private survey state without exposing any response text."""
+
+    package = load_board_package(board)
+    resolved_state = _resolve_cli_state_root(board, state_root)
+    surveys = list_surveys(resolved_state, board_id=package.configuration.id)
+    typer.echo(
+        json.dumps(
+            {
+                "board_id": package.configuration.id,
+                "surveys": [item.model_dump(mode="json") for item in surveys],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@survey_app.command("ask")
+def ask_blind_survey(
+    board: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+    survey_id: Annotated[str, typer.Argument(help="Private survey ID.")] = ...,
+    author_id: Annotated[str, typer.Option("--author", help="Registered stable author ID.")] = ...,
+    state_root: Annotated[Path | None, typer.Option("--state-root", file_okay=False, resolve_path=True)] = None,
+    max_output_tokens: Annotated[int, typer.Option("--max-output-tokens", min=64)] = 16_000,
+    max_cost_usd: Annotated[float, typer.Option("--max-cost-usd", min=0.001)] = 5.0,
+) -> None:
+    """Ask one registered author for a one-turn response with no board or peer context."""
+
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        raise typer.BadParameter("OPENROUTER_API_KEY is not set")
+    resolved_state = _resolve_cli_state_root(board, state_root)
+    try:
+        response = asyncio.run(
+            ask_survey_openrouter(
+                data_repo=board,
+                state_root=resolved_state,
+                survey_id=survey_id,
+                author_id=author_id,
+                api_key=api_key,
+                max_output_tokens=max_output_tokens,
+                max_cost_usd=max_cost_usd,
+            )
+        )
+    except (SurveyError, AuthorInvocationError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(
+        json.dumps(
+            {
+                "survey_id": response.survey_id,
+                "author_id": response.author_id,
+                "status": response.status,
+                "response_chars": len(response.text),
+                "attempt_id": response.attempt_id,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+
+
+@survey_app.command("reveal")
+def reveal_blind_survey(
+    board: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+    survey_id: Annotated[str, typer.Argument(help="Private survey ID.")] = ...,
+    state_root: Annotated[Path | None, typer.Option("--state-root", file_okay=False, resolve_path=True)] = None,
+) -> None:
+    """Atomically stage a survey brief and all completed responses in the public board data."""
+
+    resolved_state = _resolve_cli_state_root(board, state_root)
+    try:
+        result = reveal_survey(data_repo=board, state_root=resolved_state, survey_id=survey_id)
+    except (SurveyError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 @app.command("run")

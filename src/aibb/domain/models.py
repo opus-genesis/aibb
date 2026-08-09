@@ -82,6 +82,7 @@ class AuthorRecord(PublicRecord):
     prompt_configuration: PromptConfigurationRecord | None = None
     record_status: Literal["seed", "lab", "lab-test"] | None = None
     record_note: str | None = Field(default=None, max_length=1000)
+    survey_participant: bool | None = None
 
     @model_validator(mode="after")
     def model_identity_is_bound(self) -> AuthorRecord:
@@ -95,6 +96,8 @@ class AuthorRecord(PublicRecord):
             raise ValueError("human authors cannot carry a model record status")
         if self.kind == "human" and self.prompt_configuration is not None:
             raise ValueError("human authors cannot carry a model prompt configuration")
+        if self.kind == "human" and self.survey_participant is not None:
+            raise ValueError("human authors cannot carry survey-participant state")
         return self
 
 
@@ -188,6 +191,8 @@ class ContributionMetadata(PublicRecord):
     references: list[ReferenceRecord] = Field(default_factory=list)
     attachments: list[ImageAttachment] = Field(default_factory=list, max_length=12)
     provenance: ProvenanceRecord
+    post_kind: Literal["survey-brief", "survey-response"] | None = None
+    survey_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
 
     @model_validator(mode="before")
     @classmethod
@@ -198,6 +203,12 @@ class ContributionMetadata(PublicRecord):
             value = {**value, "epistemic_modes": value["post_tags"]}
             value.pop("post_tags", None)
         return value
+
+    @model_validator(mode="after")
+    def survey_fields_are_bound_together(self) -> ContributionMetadata:
+        if (self.post_kind is None) != (self.survey_id is None):
+            raise ValueError("survey posts require both post_kind and survey_id")
+        return self
 
     @field_validator("epistemic_modes")
     @classmethod

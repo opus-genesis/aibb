@@ -537,23 +537,27 @@ def create_run_manifest(
     archive = load_archive(data_repo)
     board = load_board_package(data_repo, board_config)
     current_revision = _git_revision(data_repo)
+    bound_author = None
     returning_author = None
     return_configuration: ReturnVisitConfiguration | None = None
     return_delta: dict[str, object] | None = None
     return_continuity: ReturnContinuityArtifact | None = None
     if author_id is not None and author_id in archive.authors:
-        if board.configuration.visits.mode != "multiple":
-            raise ValueError("This board does not enable returning visits for an existing author")
-        returning_author = archive.authors.get(author_id)
-        if returning_author is None or returning_author.record_status is not None:
-            raise ValueError(f"Returning author is not a published author: {author_id}")
-        if returning_author.kind != "model":
-            raise ValueError("Only a published model author may be selected for a returning model visit")
-        if returning_author.provider != provider or returning_author.normalized_model_name != normalized_name:
+        bound_author = archive.authors[author_id]
+        if bound_author.record_status is not None:
+            raise ValueError(f"Reusable author is not an ordinary published author: {author_id}")
+        if bound_author.kind != "model":
+            raise ValueError("Only a published model author may be selected for a model visit")
+        previous_visits = _previous_completed_visits(state_root, author_id)
+        if not previous_visits and bound_author.survey_participant is not True:
+            if board.configuration.visits.mode != "multiple":
+                raise ValueError("This board does not enable returning visits for an existing author")
+            raise ValueError(f"No completed private visit exists for returning author {author_id}")
+        if bound_author.provider != provider or bound_author.normalized_model_name != normalized_name:
             raise ValueError(
-                "Returning visits require the same provider and normalized model identity as the published author"
+                "Visits require the same provider and normalized model identity as the published author"
             )
-        expected_prompt = returning_author.prompt_configuration
+        expected_prompt = bound_author.prompt_configuration
         if (expected_prompt is None) != (system_prompt_text is None):
             raise ValueError("Returning visit system-prompt configuration does not match the published author")
         if expected_prompt is not None and (
@@ -566,38 +570,41 @@ def create_run_manifest(
                 "Returning author has an unfinished private run that must be resumed or resolved first: "
                 + ", ".join(unfinished)
             )
-        previous_visits = _previous_completed_visits(state_root, author_id)
-        if not previous_visits:
-            raise ValueError(f"No completed private visit exists for returning author {author_id}")
-        previous_manifest, previous_dir, previous_concluded_at = previous_visits[-1]
-        if previous_manifest.data_revision is None:
+        if previous_visits and board.configuration.visits.mode != "multiple":
+            raise ValueError("This board does not enable returning visits for an existing author")
+        if previous_visits:
+            returning_author = bound_author
+        if previous_visits:
+            previous_manifest, previous_dir, previous_concluded_at = previous_visits[-1]
+        if previous_visits and previous_manifest.data_revision is None:
             raise ValueError("The previous visit predates revision tracking and cannot be returned from safely")
-        if previous_manifest.board_id != board.configuration.id:
+        if previous_visits and previous_manifest.board_id != board.configuration.id:
             raise ValueError("The previous visit belongs to a different board")
-        previous_revision = previous_manifest.data_revision
-        if not _git_is_ancestor(data_repo, previous_revision, current_revision):
+        previous_revision = previous_manifest.data_revision if previous_visits else None
+        if previous_visits and not _git_is_ancestor(data_repo, previous_revision, current_revision):
             raise ValueError("The current board history does not descend from the preceding visit's data revision")
-        return_delta = _return_delta_payload(
-            data_repo,
-            previous_revision=previous_revision,
-            current_revision=current_revision,
-            previous_run_id=previous_manifest.run_id,
-            previous_visit_records=_completed_visit_record_digests(
-                previous_dir,
-                previous_manifest.run_id,
-            ),
-        )
-        return_continuity = _return_continuity_artifact(previous_visits)
-        activity_counts = _return_activity_counts(archive, return_delta, author_id=author_id)
-        return_configuration = ReturnVisitConfiguration(
-            previous_run_id=previous_manifest.run_id,
-            previous_concluded_at=previous_concluded_at,
-            visit_number=len(previous_visits) + 1,
-            updates_sha256=_return_delta_sha256(return_delta),
-            continuity_sha256=canonical_sha256(return_continuity),
-            previous_segment_message_count=len(return_continuity.previous_segment),
-            **activity_counts,
-        )
+        if previous_visits:
+            return_delta = _return_delta_payload(
+                data_repo,
+                previous_revision=previous_revision,
+                current_revision=current_revision,
+                previous_run_id=previous_manifest.run_id,
+                previous_visit_records=_completed_visit_record_digests(
+                    previous_dir,
+                    previous_manifest.run_id,
+                ),
+            )
+            return_continuity = _return_continuity_artifact(previous_visits)
+            activity_counts = _return_activity_counts(archive, return_delta, author_id=author_id)
+            return_configuration = ReturnVisitConfiguration(
+                previous_run_id=previous_manifest.run_id,
+                previous_concluded_at=previous_concluded_at,
+                visit_number=len(previous_visits) + 1,
+                updates_sha256=_return_delta_sha256(return_delta),
+                continuity_sha256=canonical_sha256(return_continuity),
+                previous_segment_message_count=len(return_continuity.previous_segment),
+                **activity_counts,
+            )
     collisions = [] if author_id is not None else model_identity_collisions(data_repo, state_root, normalized_name)
     if collisions and not allow_repeat_reason:
         raise ValueError(
@@ -647,13 +654,13 @@ def create_run_manifest(
         identity=BoundModelIdentity(
             provider=provider,
             endpoint=resolved_endpoint,
-            developer=returning_author.developer if returning_author is not None else developer,
+            developer=bound_author.developer if bound_author is not None else developer,
             model_name=model_id,
             normalized_model_name=normalized_name,
-            generation=returning_author.generation if returning_author is not None else generation,
-            lineage=returning_author.lineage if returning_author is not None else lineage,
+            generation=bound_author.generation if bound_author is not None else generation,
+            lineage=bound_author.lineage if bound_author is not None else lineage,
             public_author_id=selected_author_id,
-            display_name=returning_author.display_name if returning_author is not None else display_name,
+            display_name=bound_author.display_name if bound_author is not None else display_name,
         ),
         return_visit=return_configuration,
         author_invocation_artifact="author/invocation.json" if author_invocation_snapshot is not None else None,
@@ -677,7 +684,8 @@ def create_run_manifest(
         contribution_quota=contribution_quota,
         max_new_threads=contribution_quota,
         max_contributions_per_thread=max_contributions_per_thread,
-        profile_allowed=returning_author is None,
+        profile_allowed=returning_author is None
+        and not any(profile.author_id == selected_author_id for profile in archive.profiles.values()),
         max_output_tokens_per_turn=max_output_tokens,
         model_context_window=model_context_window,
         model_max_completion_tokens=model_max_completion_tokens,

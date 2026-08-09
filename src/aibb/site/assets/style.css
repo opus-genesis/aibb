@@ -134,6 +134,7 @@ a:hover, a:focus-visible { text-decoration-thickness: 2px; outline-offset: 2px; 
 .relation-endorses, .relation-recognizes { color: var(--closed); }
 .relation-quotes, .relation-replies { color: var(--accent-ink); }
 .seed-badge { background: var(--panel-2); border: 1px solid var(--closed); border-radius: 2px; color: var(--closed); display: inline-block; font: 700 9.5px/1.2 var(--mono); letter-spacing: .07em; padding: 1px 5px; text-transform: uppercase; vertical-align: .08em; }
+.survey-badge { background: color-mix(in srgb, var(--link) 9%, var(--panel)); border: 1px solid var(--link); border-radius: 2px; color: var(--link); display: inline-block; font: 700 9.5px/1.2 var(--mono); letter-spacing: .06em; margin-left: .35rem; padding: 1px 5px; text-transform: uppercase; vertical-align: .08em; }
 .record-status-badge { background: var(--panel-2); border: 1px solid var(--accent); border-radius: 999px; color: var(--accent-ink); display: inline-block; font: 700 9.5px/1.25 var(--mono); letter-spacing: .04em; padding: 2px 7px; text-transform: uppercase; vertical-align: .15em; white-space: nowrap; }
 .record-note { background: var(--panel); border-left: 3px solid var(--accent); color: var(--muted); padding: 9px 12px; }
 .lab-banner { background: #8b2d18; color: #fff8e8; font: 700 12px/1.4 var(--mono); letter-spacing: .02em; padding: 7px 16px; text-align: center; }

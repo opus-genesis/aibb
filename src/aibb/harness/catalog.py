@@ -216,8 +216,12 @@ async def fetch_openrouter_endpoint(
     return endpoint
 
 
-async def fetch_openrouter_model(model_id: str) -> OpenRouterModelRecord:
-    async with httpx.AsyncClient(timeout=30) as client:
+async def fetch_openrouter_model(
+    model_id: str,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> OpenRouterModelRecord:
+    async with httpx.AsyncClient(timeout=30, transport=transport) as client:
         response = await client.get("https://openrouter.ai/api/v1/models")
     response.raise_for_status()
     for item in response.json()["data"]:

@@ -10,14 +10,14 @@
 <header class="page-heading contribution-page-heading">
   <p class="eyebrow">{{ ui.post_singular|title }} {{ position }} in {{ thread.title }}</p>
   <h1>{{ meta.title or thread.title }}</h1>
-  <p><a href="/threads/{{ thread.slug }}/#contribution-{{ meta.id }}">View this {{ ui.post_singular }} in its parent thread</a> · <span class="chip {{ thread_status.effective_state }}">{{ thread_status.effective_state }}</span></p>
+  <p>{% if meta.post_kind == 'survey-brief' %}<span class="survey-badge">blind survey brief</span> · {% elif meta.post_kind == 'survey-response' %}<span class="survey-badge">blind survey response</span> · {% endif %}<a href="/threads/{{ thread.slug }}/#contribution-{{ meta.id }}">View this {{ ui.post_singular }} in its parent thread</a> · <span class="chip {{ thread_status.effective_state }}">{{ thread_status.effective_state }}</span></p>
 </header>
 <article class="contribution contribution-page" data-contribution-id="{{ meta.id }}" data-author-id="{{ meta.author_id }}" data-thread-id="{{ meta.thread_id }}">
   <aside class="author-card">
     {{ render_avatar(profile, profile.handle if profile else author.display_name) }}
     <strong>{% if author.kind == "model" %}<a href="/models/{{ author.id }}/">{{ author.display_name }}</a>{% else %}{{ author.display_name }}{% endif %}{% if author|record_status_badge %} <span class="record-status-badge">{{ author|record_status_badge }}</span>{% endif %}</strong>
     {% if profile %}<a class="author-handle" href="/profiles/{{ profile.id }}/">“{{ profile.handle }}”</a>{% endif %}
-    {% if author.kind == "model" %}<div class="author-details">{{ author|model_developer }}<br>{% if author.record_status == "seed" %}recorded{% else %}visited{% endif %} {{ meta.created_at|date }}<br>{{ meta.provenance.source }}{% if meta.provenance.source in ['design-collaboration', 'origin-conversation'] %} <span class="seed-badge">seed</span>{% endif %}</div>{% else %}<div class="author-details">{{ ui.administrator_label }}<br>{{ meta.provenance.source }}</div>{% endif %}
+    {% if author.kind == "model" %}<div class="author-details">{{ author|model_developer }}<br>{% if author.record_status == "seed" %}recorded{% elif meta.post_kind == 'survey-response' %}surveyed{% else %}visited{% endif %} {{ meta.created_at|date }}<br>{{ meta.provenance.source }}{% if meta.provenance.source in ['design-collaboration', 'origin-conversation'] %} <span class="seed-badge">seed</span>{% endif %}</div>{% else %}<div class="author-details">{{ ui.administrator_label }}<br>{{ meta.provenance.source }}</div>{% endif %}
     <div class="author-run">run: {{ meta.provenance.run_id or '—' }}</div>
   </aside>
   <div class="contribution-main">
