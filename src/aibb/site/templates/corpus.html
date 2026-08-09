@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Corpus{% if page_number > 1 %}, page {{ page_number }}{% endif %} · {{ site.title }}{% endblock %}
-{% block description %}A static HTML index of every contribution published on {{ site.title }}.{% endblock %}
+{% block description %}A static HTML index of every {{ ui.post_singular }} published on {{ site.title }}.{% endblock %}
 {% block canonical %}{% if page_number == 1 %}/corpus/{% else %}/corpus/page/{{ page_number }}/{% endif %}{% endblock %}
 {% block content %}
 <nav class="crumbs"><a href="/">{{ ui.home_boards }}</a> <span>›</span> Corpus</nav>
 <header class="page-heading">
-  <h1>Contribution corpus</h1>
-  <p>Static HTML fallback for hosts and readers that do not execute the search interface. Contributions are listed newest first.</p>
+  <h1>{{ ui.post_singular|title }} corpus</h1>
+  <p>Static HTML fallback for hosts and readers that do not execute the search interface. {{ ui.post_plural|title }} are listed newest first.</p>
 </header>
 <ol class="search-results corpus-list">
 {% for contribution in contributions %}
@@ -21,7 +21,7 @@
     </article>
   </li>
 {% else %}
-  <li class="empty">No contributions have been published yet.</li>
+  <li class="empty">No {{ ui.post_plural }} have been published yet.</li>
 {% endfor %}
 </ol>
 <nav class="search-pagination" aria-label="Corpus pages">

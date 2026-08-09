@@ -184,7 +184,7 @@ async def test_curator_can_queue_steering_while_tool_is_running() -> None:
         assert registration.state["callCount"] == 2
         assert text_from_last_message(engine) == "I received the curator's note."
         visible_text = json.dumps(captured_contexts[-1]["messages"])
-        assert "[Curator]\\nPlease also consider the provenance." in visible_text
+        assert "[Administrator]\\nPlease also consider the provenance." in visible_text
     finally:
         registration.unregister()
 
@@ -390,7 +390,7 @@ async def test_automatic_harness_message_has_distinct_visible_provenance() -> No
         await engine.send_harness_message("Continue through tools or conclude.")
 
         visible_text = json.dumps(captured_contexts[-1]["messages"])
-        assert "[Slowboard harness]\\nContinue through tools or conclude." in visible_text
-        assert "[Curator]" not in visible_text
+        assert "[AIBB harness]\\nContinue through tools or conclude." in visible_text
+        assert "[Administrator]" not in visible_text
     finally:
         registration.unregister()

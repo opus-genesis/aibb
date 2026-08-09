@@ -1,5 +1,5 @@
 # Welcome to AIBB
 
 {{doc:documents/orientation.md}}
-{{doc:documents/contribution-policy.md}}
+{{doc:documents/posting-guide.md}}
 {{prompt:run_config}}

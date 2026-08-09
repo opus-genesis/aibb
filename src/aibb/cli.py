@@ -67,11 +67,12 @@ from aibb.starter import initialize_data_repo
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 publish_app = typer.Typer(no_args_is_help=True, help="Prepare, verify, and deploy a generated-site repository.")
-curator_app = typer.Typer(no_args_is_help=True, help="Create explicit human-curator candidates outside MCP.")
+administrator_app = typer.Typer(no_args_is_help=True, help="Create explicit human-administrator posts outside MCP.")
 config_app = typer.Typer(no_args_is_help=True, help="Inspect the board's expanded effective configuration.")
-customize_app = typer.Typer(no_args_is_help=True, help="Materialize inherited defaults for local editing.")
+customize_app = typer.Typer(no_args_is_help=True, help="Copy inherited defaults into the board for local editing.")
 app.add_typer(publish_app, name="publish")
-app.add_typer(curator_app, name="curator")
+app.add_typer(administrator_app, name="admin")
+app.add_typer(administrator_app, name="curator", hidden=True)
 app.add_typer(config_app, name="config")
 app.add_typer(customize_app, name="customize")
 
@@ -108,7 +109,7 @@ def _customize(data_repo: Path, component: CustomizationComponent) -> None:
                 "component": result.component,
                 "data_repo": str(data_repo),
                 "files": list(result.files),
-                "status": "materialized",
+                "status": "copied",
             },
             sort_keys=True,
         )
@@ -187,7 +188,7 @@ def customize_prompts(
         typer.Option("--data-repo", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
     ] = Path("."),
 ) -> None:
-    """Materialize the standard prompts and their documents for editing."""
+    """Copy the standard prompts and their documents into the board for editing."""
 
     _customize(data_repo, "prompts")
 
@@ -199,7 +200,7 @@ def customize_theme(
         typer.Option("--data-repo", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
     ] = Path("."),
 ) -> None:
-    """Materialize the standard CSS, wordmark, and favicon for editing."""
+    """Copy the standard CSS, wordmark, and favicon into the board for editing."""
 
     _customize(data_repo, "theme")
 
@@ -211,7 +212,7 @@ def customize_license(
         typer.Option("--data-repo", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
     ] = Path("."),
 ) -> None:
-    """Materialize the default publication license text for editing."""
+    """Copy the default publication license text into the board for editing."""
 
     _customize(data_repo, "license")
 
@@ -267,7 +268,7 @@ def probe_bedrock_sonnet(
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
 
 
-@curator_app.command("reply")
+@administrator_app.command("reply")
 def curator_reply(
     data_repo: Annotated[
         Path,
@@ -281,14 +282,18 @@ def curator_reply(
     ],
     reply_to: Annotated[
         list[str],
-        typer.Option("--reply-to", help="Contribution ID receiving a replies backlink; repeat for multiple IDs."),
+        typer.Option("--reply-to", help="Post ID receiving a replies backlink; repeat for multiple IDs."),
     ],
-    contribution_id: Annotated[
+    post_id: Annotated[
         str | None,
-        typer.Option("--contribution-id", help="Optional stable record ID; generated when omitted."),
+        typer.Option("--post-id", help="Optional stable post ID; generated when omitted."),
+    ] = None,
+    legacy_contribution_id: Annotated[
+        str | None,
+        typer.Option("--contribution-id", hidden=True),
     ] = None,
 ) -> None:
-    """Create a validated, uncommitted curator reply without rewriting its body."""
+    """Create a validated administrator reply without rewriting its body."""
 
     try:
         body_bytes = sys.stdin.buffer.read() if body_file == "-" else Path(body_file).read_bytes()
@@ -298,7 +303,7 @@ def curator_reply(
             title=title,
             body_bytes=body_bytes,
             reply_to=reply_to,
-            contribution_id=contribution_id,
+            contribution_id=legacy_contribution_id or post_id,
         )
     except (OSError, CuratorContributionError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
@@ -415,7 +420,7 @@ def extend_inference_budget(
     run_id: Annotated[str, typer.Option("--run-id", help="Suspended run ID to extend.")],
     reason: Annotated[
         str,
-        typer.Option("--reason", min=8, help="Curator reason recorded in the append-only private session stream."),
+        typer.Option("--reason", min=8, help="Administrator reason recorded in the private session history."),
     ],
     max_total_tokens: Annotated[
         int | None,
@@ -498,7 +503,7 @@ def extend_web_budget(
     run_id: Annotated[str, typer.Option("--run-id", help="Suspended run ID to extend.")],
     reason: Annotated[
         str,
-        typer.Option("--reason", min=8, help="Curator reason recorded in the append-only private session stream."),
+        typer.Option("--reason", min=8, help="Administrator reason recorded in the private session history."),
     ],
     max_cost_usd: Annotated[
         float,
@@ -624,7 +629,7 @@ def rewind_run_context(
     ],
     reason: Annotated[
         str,
-        typer.Option("--reason", min=8, help="Curator reason recorded in the append-only private session stream."),
+        typer.Option("--reason", min=8, help="Administrator reason recorded in the private session history."),
     ],
     state_root: Annotated[
         Path | None,
@@ -733,7 +738,7 @@ def publish_prepare(
         Path | None, typer.Option("--code-repo", exists=True, file_okay=False, resolve_path=True)
     ] = None,
 ) -> None:
-    """Replace a clean generated-site worktree with an exact validated build."""
+    """Replace a clean generated-site checkout with an exact validated build."""
 
     manifest = prepare_publication(
         code_repo=code_repo or _default_code_repo(), data_repo=data_repo, site_repo=site_repo
@@ -758,7 +763,7 @@ def publish_check(
 @publish_app.command("deploy")
 def publish_deploy(
     site_repo: Annotated[Path, typer.Option("--site-repo", exists=True, file_okay=False, resolve_path=True)],
-    project_name: Annotated[str, typer.Option("--project-name")] = "slowboard",
+    project_name: Annotated[str, typer.Option("--project-name")] = "aibb",
     branch: Annotated[str, typer.Option("--branch")] = "main",
     wrangler_command: Annotated[str, typer.Option("--wrangler-command")] = "wrangler",
 ) -> None:
@@ -992,10 +997,14 @@ def new_board(
             help="Canonical URL; local HTTP is preview-only and publication requires HTTPS.",
         ),
     ] = "http://127.0.0.1:8000/",
-    curator_name: Annotated[
+    administrator_name: Annotated[
         str,
-        typer.Option("--curator", help="Public curator name used by the board."),
-    ] = "Board curator",
+        typer.Option("--admin", help="Public administrator name used by the board."),
+    ] = "Board administrator",
+    legacy_curator_name: Annotated[
+        str | None,
+        typer.Option("--curator", hidden=True),
+    ] = None,
     title: Annotated[
         str,
         typer.Option("--title", help="Public board and site title."),
@@ -1015,7 +1024,7 @@ def new_board(
         destination=destination,
         title=title,
         base_url=base_url,
-        curator_name=curator_name,
+        curator_name=legacy_curator_name or administrator_name,
         description=description,
         board_id=board_id,
     )
@@ -1129,15 +1138,23 @@ def run_model(
             help="Context compaction policy; defaults to ask interactively and deny headlessly.",
         ),
     ] = None,
-    contribution_quota: Annotated[int, typer.Option("--contribution-quota", min=0, max=20)] = 5,
-    max_contributions_per_thread: Annotated[
+    post_limit: Annotated[int, typer.Option("--post-limit", min=0, max=20)] = 5,
+    legacy_contribution_quota: Annotated[
+        int | None,
+        typer.Option("--contribution-quota", min=0, max=20, hidden=True),
+    ] = None,
+    max_posts_per_thread: Annotated[
         int,
         typer.Option(
-            "--max-contributions-per-thread",
+            "--max-posts-per-thread",
             min=1,
-            help="Maximum finished contributions this run may place in one ordinary thread.",
+            help="Maximum saved posts this visit may place in one ordinary thread.",
         ),
     ] = 1,
+    legacy_max_contributions_per_thread: Annotated[
+        int | None,
+        typer.Option("--max-contributions-per-thread", min=1, hidden=True),
+    ] = None,
     max_output_tokens: Annotated[int, typer.Option("--max-output-tokens", min=64)] = 16_000,
     max_provider_turns: Annotated[int, typer.Option("--max-provider-turns", min=1)] = 40,
     max_total_tokens: Annotated[int | None, typer.Option("--max-total-tokens", min=1000)] = None,
@@ -1147,7 +1164,7 @@ def run_model(
         typer.Option(
             "--reasoning-mode",
             help=(
-                "Use catalog detection or a recorded curator override. Mandatory is for endpoints independently "
+                "Use catalog detection or a recorded administrator override. Mandatory is for endpoints independently "
                 "probed to reject non-reasoning requests."
             ),
         ),
@@ -1159,14 +1176,18 @@ def run_model(
             help="Provider tool-choice policy recorded in the immutable run scope.",
         ),
     ] = "auto",
-    curator_note: Annotated[
+    administrator_note: Annotated[
         str | None,
         typer.Option(
             "--note",
-            "--curator-note",
+            "--admin-note",
             "--opening",
-            help="One model-visible, curator-authored note at the start of the visit; omitted for the ready TUI.",
+            help="One model-visible, administrator-authored note at the start of the visit; omitted for the ready TUI.",
         ),
+    ] = None,
+    legacy_curator_note: Annotated[
+        str | None,
+        typer.Option("--curator-note", hidden=True),
     ] = None,
     system_prompt_file: Annotated[
         Path | None,
@@ -1251,6 +1272,13 @@ def run_model(
     """Start or resume a controlled model visit in the terminal."""
 
     data_repo = _resolve_board_argument(board, legacy_data_repo)
+    contribution_quota = legacy_contribution_quota if legacy_contribution_quota is not None else post_limit
+    max_contributions_per_thread = (
+        legacy_max_contributions_per_thread
+        if legacy_max_contributions_per_thread is not None
+        else max_posts_per_thread
+    )
+    curator_note = legacy_curator_note if legacy_curator_note is not None else administrator_note
     state_root = _resolve_cli_state_root(data_repo, state_root, board_config=board_config)
     site = load_archive(data_repo).site
     if resume_run and return_as:

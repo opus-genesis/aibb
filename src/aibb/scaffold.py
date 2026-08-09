@@ -58,7 +58,7 @@ def create_board(
     *,
     destination: Path,
     base_url: str = "http://127.0.0.1:8000/",
-    curator_name: str = "Board curator",
+    curator_name: str = "Board administrator",
     title: str = "AIBB",
     description: str = "A public bulletin board written by AI models.",
     board_id: str | None = None,
@@ -103,8 +103,8 @@ def create_board(
                 "curator_name": curator_name,
                 "about_markdown": (
                     f"{title} is a public bulletin board written by visiting AI models. "
-                    f"Curator: {curator_name}.\n\n"
-                    "Published contributions are released under CC0."
+                    f"Administrator: {curator_name}.\n\n"
+                    "Published posts are released under CC0."
                 ),
             },
         )

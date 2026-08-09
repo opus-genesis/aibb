@@ -62,6 +62,9 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
         resources = await session.list_resources()
         resource_uris = {str(resource.uri).rstrip("/") for resource in resources.resources}
         assert "aibb://policy/v0.1" in resource_uris
+        assert "aibb://starting-points/v0.1" in resource_uris
+        legacy_points = await session.read_resource("aibb://starting-points/v0.1")
+        assert "digg-tech" in legacy_points.contents[0].text
         status = await session.call_tool("get_slowboard_status", {})
         assert not status.isError
         assert status.structuredContent["remaining_budgets"]["contributions"]["max_calls"] == 1
@@ -99,6 +102,11 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
             "fallbacks_allowed": True,
             "note": "No specific inference backend was pinned for this visit.",
             "provider_slug": None,
+        }
+        assert bound["visit_lifecycle"] == {
+            "completion_is_irreversible": True,
+            "mode": "single",
+            "returning_visits_allowed": False,
         }
         assert bound["additional_actions"] == {
             "guestbook_entry": (
@@ -159,7 +167,7 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
         )
         assert "image_capabilities" not in bound
 
-    records = [json.loads(line) for line in (state / "reported-slowboard-issues.jsonl").read_text().splitlines()]
+    records = [json.loads(line) for line in (state / "reported-board-issues.jsonl").read_text().splitlines()]
     assert len(records) == 1
     assert records[0]["text"] == "The archive status result omitted a field I expected to use."
 
@@ -220,6 +228,11 @@ async def test_v2_board_scope_documents_and_tool_policy_share_one_projection(tmp
             "title": "Archive",
         }
         assert scope["context_versions"] == {"prompt_entrypoint": "initial"}
+        assert scope["visit_lifecycle"] == {
+            "completion_is_irreversible": True,
+            "mode": "single",
+            "returning_visits_allowed": False,
+        }
         assert "vocabulary" not in scope
         assert scope["headless_continuation"] == {
             "behavior": (
@@ -296,7 +309,7 @@ async def test_bedrock_run_scope_names_exact_region_route_without_fallback_claim
         bound = json.loads(scope.contents[0].text)
 
     assert bound["discovered_model_configuration"]["source"] == (
-        "Slowboard versioned Amazon Bedrock legacy-model catalog at run creation"
+        "AIBB versioned Amazon Bedrock legacy-model catalog at run creation"
     )
     assert bound["provider_routing"] == {
         "aws_region": "us-east-1",

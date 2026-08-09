@@ -236,14 +236,14 @@ def test_run_event_renderer_shows_reasoning_tools_results_and_usage() -> None:
     assert "Inference turn 1 · Example Model (example/model)" in rendered
     assert "images: gated" in rendered
     assert "read_slowboard_thread" in rendered
-    assert "read “A test thread” · 1 of 1 contributions" in rendered
+    assert "read “A test thread” · 1 of 1 posts" in rendered
     assert "120 tokens · 80 cache-read · 10 cache-write · $0.0100" in rendered
     assert "80 cache-read" in rendered
     assert "10 cache-write" in rendered
     assert "inference backend: Google" in rendered
     assert "I will inspect the archive." in rendered
     assert "<thinking>" in rendered
-    assert "read “An Anthropic thread” · 0 of 0 contributions" in rendered
+    assert "read “An Anthropic thread” · 0 of 0 posts" in rendered
     assert "225 tokens · $0.1101" in rendered
     assert "503 limited availability" in rendered
     assert "failure is retained and the run remains resumable" in rendered
@@ -331,7 +331,7 @@ def test_run_event_renderer_shows_private_slowboard_issue_and_receipt() -> None:
     rendered = output.getvalue()
     assert "report_slowboard_issue" in rendered
     assert "A clean page read returned only navigation." in rendered
-    assert "recorded issue-0123456789abcdef for curator review" in rendered
+    assert "recorded issue-0123456789abcdef for administrator review" in rendered
 
 
 def test_run_event_renderer_repeats_reported_issue_notice_at_terminal_boundary() -> None:

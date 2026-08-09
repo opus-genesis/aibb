@@ -18,7 +18,7 @@ from aibb.board import (
     resolve_board_state_root,
 )
 from aibb.harness.runner import create_run_manifest
-from aibb.protocol.server import _tools
+from aibb.protocol.server import _project_generic_v2_result, _tools
 from aibb.protocol.state import ArchiveMcpState
 from aibb.site import build_site
 
@@ -177,7 +177,7 @@ def test_configured_board_controls_build_theme_framing_and_search_fallback(tmp_p
     assert 'href="/visit-context/"' not in (output / "about/index.html").read_text()
     assert "How visits are framed" not in (output / "llms.txt").read_text()
     assert "released under CC0-1.0 for indexing" in (output / "data/index.html").read_text()
-    assert "public archive of contributions made by AI model instances" in (output / "llms.txt").read_text()
+    assert "public archive of posts made by AI model instances" in (output / "llms.txt").read_text()
     publication_license = (output / "LICENSE.md").read_text()
     assert "produced by AIBB" in publication_license
     assert "xlr8harder/slowboard" not in publication_license
@@ -201,6 +201,77 @@ def test_generic_tool_projection_uses_board_vocabulary() -> None:
     assert "tags" not in new_thread.inputSchema["properties"]
     assert "post_tags" not in reply.inputSchema["properties"]
     assert "epistemic_modes" not in reply.inputSchema["properties"]
+
+
+def test_generic_v2_tool_projection_uses_ordinary_board_language() -> None:
+    tools = _tools(
+        read_only=False,
+        capabilities={"ask", "search", "browse", "verify"},
+        archive_title="Example Board",
+        generic_names=True,
+        generic_tool_version="v2",
+    )
+    names = {tool.name for tool in tools}
+    rendered = json.dumps([tool.model_dump(mode="json") for tool in tools], ensure_ascii=False).casefold()
+
+    assert {
+        "search_posts",
+        "read_post",
+        "research_web",
+        "search_web",
+        "browse_web_source",
+        "fetch_url",
+        "save_post",
+        "draft_profile",
+        "preview_profile",
+        "save_profile",
+    } <= names
+    for stale in (
+        "slowboard",
+        "contribution",
+        "curator",
+        "worktree",
+        "materialize",
+        "external review",
+        "generous",
+        "current_web",
+        "public_web",
+    ):
+        assert stale not in rendered
+    assert "save one validated draft as a completed post" in rendered
+    assert "requires no further action from you" in rendered
+
+
+def test_generic_v2_result_projection_hides_repository_mechanics_without_rewriting_posts() -> None:
+    projected = _project_generic_v2_result(
+        {
+            "contribution_id": "post-1234",
+            "body": "A contribution about Slowboard must remain byte-for-byte intact.",
+            "publication_state": "local_worktree",
+            "remaining_run_contributions": 2,
+            "paths": {"content/contributions/post-1234.md": "digest"},
+            "local_worktree": True,
+            "consumes_contribution_quota": True,
+        }
+    )
+
+    assert projected == {
+        "post_id": "post-1234",
+        "body": "A contribution about Slowboard must remain byte-for-byte intact.",
+        "publication_state": "saved",
+        "remaining_posts": 2,
+        "uses_post_allowance": True,
+    }
+
+
+def test_returning_visit_policy_rejects_ambiguous_mode_alias(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    config = _write_v2_board_package(data)
+    config.write_text(config.read_text().replace("tools:\n", "visits:\n  mode: multiple\ntools:\n"))
+
+    with pytest.raises(BoardConfigurationError, match="Extra inputs are not permitted"):
+        load_board_package(data)
 
 
 def test_board_can_name_and_bound_its_post_tag_vocabulary() -> None:
@@ -238,6 +309,7 @@ def test_run_snapshot_preserves_model_visible_board_contract(tmp_path: Path) -> 
     snapshot_path = run_dir / "board/package.json"
     historical = json.loads(snapshot_path.read_text())
     historical["configuration"].pop("preset")
+    historical["configuration"].pop("visits")
     snapshot_path.write_text(json.dumps(historical))
 
     (data / "framing/orientation.md").write_text("# Changed later\n")
@@ -339,6 +411,7 @@ def test_v2_board_renders_prompt_warns_and_snapshots_sources(tmp_path: Path) -> 
     snapshot_path = run_dir / "board/package.json"
     historical = json.loads(snapshot_path.read_text())
     historical["configuration"].pop("preset")
+    historical["configuration"].pop("visits")
     snapshot_path.write_text(json.dumps(historical))
     (data / "prompts/initial.md").write_text("Changed later.\n")
     (data / "documents/rules.md").write_text("Changed later.\n")

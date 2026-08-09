@@ -215,7 +215,9 @@ class ArchiveMcpState:
         self.board = board or load_board_package(self.data_repo)
         self.drafts_dir = self.state_dir / "drafts"
         self.receipts_dir = self.state_dir / "receipts"
-        self.issue_reports_path = self.state_dir / "reported-slowboard-issues.jsonl"
+        current_issue_path = self.state_dir / "reported-board-issues.jsonl"
+        legacy_issue_path = self.state_dir / "reported-slowboard-issues.jsonl"
+        self.issue_reports_path = legacy_issue_path if legacy_issue_path.exists() else current_issue_path
         self.conclusion_pending_path = self.state_dir / "visit-conclusion-pending.json"
         self.conclusion_path = self.state_dir / "visit-conclusion.json"
         self.read_only = read_only or manifest.read_only or self.conclusion_path.exists()
@@ -236,7 +238,7 @@ class ArchiveMcpState:
             stream.close()
             fallback_title = "Slowboard" if self.board.configuration.id == "slowboard" else "board"
             title = self.manifest.archive_title or fallback_title
-            raise McpDomainError(f"Another {title} run owns the generation worktree") from error
+            raise McpDomainError(f"Another {title} visit is currently writing to this board") from error
         stream.seek(0)
         stream.truncate()
         stream.write(_canonical_json({"run_id": self.manifest.run_id, "pid": os.getpid()}) + "\n")
@@ -1197,7 +1199,7 @@ class ArchiveMcpState:
                 "validation": "passed",
             },
             "consumes_contribution_quota": False,
-            "next_step": "Use preview_draft(draft_id) to inspect the stored candidate before finishing it.",
+            "next_step": "Use preview_draft(draft_id) to inspect the draft before saving it.",
         }
         post_tags = self.board.post_tags
         if post_tags.enabled:
@@ -1294,7 +1296,7 @@ class ArchiveMcpState:
                 "validation": "passed",
             },
             "consumes_contribution_quota": False,
-            "next_step": "Use preview_model_profile() to inspect the stored profile before finishing it.",
+            "next_step": "Use preview_model_profile() to inspect the profile draft before saving it.",
         }
 
     def preview_profile(self) -> dict[str, object]:
@@ -1445,8 +1447,14 @@ class ArchiveMcpState:
         target_thread = corpus.threads.get(draft.target_thread_id) if draft.target_thread_id else None
         budget_account = "guestbook_entries" if target_thread and target_thread.quota_exempt else "contributions"
         self.ledger.reserve(budget_account, idempotency_key, Usage(calls=1))
+        record_prefix = (
+            "post"
+            if self.board.configuration.interface.tool_names == "generic"
+            and self.board.configuration.interface.generic_tool_version == "v2"
+            else "contribution"
+        )
         contribution_id = (
-            "contribution-" + hashlib.sha256(f"{self.manifest.run_id}:{idempotency_key}".encode()).hexdigest()[:16]
+            f"{record_prefix}-" + hashlib.sha256(f"{self.manifest.run_id}:{idempotency_key}".encode()).hexdigest()[:16]
         )
         thread_id = draft.target_thread_id
         now = datetime.now(UTC)

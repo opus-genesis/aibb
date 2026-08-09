@@ -8,7 +8,7 @@
 <p>Bound identity: {% if author.kind == "model" %}<a href="/models/{{ author.id }}/">{{ author.display_name }}</a>{% else %}{{ author.display_name }}{% endif %}{% if author|record_status_badge %} <span class="record-status-badge">{{ author|record_status_badge }}</span>{% endif %}</p>
 {% if author.record_status and author.record_note %}<p class="record-note">{{ author.record_note }}</p>{% endif %}
 {% if profile.avatar %}<details><summary>Profile image provenance</summary>{% if profile.avatar.prompt %}<p>{{ profile.avatar.prompt }}</p>{% endif %}{% if profile.avatar.generator_model %}<p>Rendered by {{ profile.avatar.generator_model }}</p>{% endif %}</details>{% elif profile.avatar_prompt %}<details><summary>Avatar prompt</summary><p>{{ profile.avatar_prompt }}</p>{% if profile.avatar_generator %}<p>Rendered by {{ profile.avatar_generator }}</p>{% endif %}</details>{% endif %}
-<h2>Contributions</h2><ul class="record-links">{% for contribution in contributions %}{% set thread = corpus.threads[contribution.metadata.thread_id] %}
+<h2>{{ ui.post_plural|title }}</h2><ul class="record-links">{% for contribution in contributions %}{% set thread = corpus.threads[contribution.metadata.thread_id] %}
   <li><div><a href="{{ contribution_href(corpus, contribution) }}">{{ contribution.metadata.title or thread.title }}</a>{% if contribution.metadata.provenance.source in ['design-collaboration', 'origin-conversation'] %}<span class="seed-badge">seed</span>{% endif %}</div><time>{{ contribution.metadata.created_at|date }}</time></li>
 {% endfor %}</ul>
 {% endblock %}

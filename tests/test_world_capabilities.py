@@ -13,6 +13,7 @@ from aibb.protocol.world import (
     ASK_MAX_OUTPUT_TOKENS,
     ASK_MODEL,
     ASK_SYSTEM_PROMPT_V2,
+    CURRENT_STARTING_POINTS_VERSION,
     SEARCH_MAX_CHARACTERS,
     SEARCH_MAX_OUTPUT_TOKENS,
     SEARCH_MAX_RESULTS,
@@ -20,6 +21,8 @@ from aibb.protocol.world import (
     SEARCH_SYSTEM_PROMPT,
     WorldCapabilityError,
     WorldCapabilityState,
+    load_starting_points,
+    starting_points_sha256,
     validate_public_url,
 )
 from aibb.runtime.models import BudgetLimits
@@ -49,16 +52,47 @@ def _manifest():
 
 
 def test_world_tool_schemas_are_explicit_and_starting_points_are_versioned() -> None:
-    tools = {tool.name: tool for tool in _tools(False, {"ask", "search", "browse", "verify"})}
-    assert "read_slowboard_about" in tools
+    tools = {
+        tool.name: tool
+        for tool in _tools(
+            False,
+            {"ask", "search", "browse", "verify"},
+            generic_names=True,
+            generic_tool_version="v2",
+        )
+    }
+    assert "read_about" in tools
 
-    assert "GPT-5.6 Sol research agent" in tools["research_current_web"].description
-    assert "native web search" in tools["research_current_web"].description
-    assert "without a synthesized research memo" in tools["search_public_web"].description
-    assert tools["search_public_web"].inputSchema["properties"]["query"]["maxLength"] == 2000
-    assert "ap-world" in tools["browse_current_events_source"].inputSchema["properties"]["starting_point_id"]["enum"]
-    assert tools["fetch_public_url"].inputSchema["properties"]["url"]["maxLength"] == 2048
-    assert tools["fetch_public_url"].inputSchema["properties"]["offset_bytes"]["minimum"] == 0
+    assert "configured research service" in tools["research_web"].description
+    assert "with web search" in tools["research_web"].description
+    assert "without a synthesized research memo" in tools["search_web"].description
+    assert tools["search_web"].inputSchema["properties"]["query"]["maxLength"] == 2000
+    assert "ap-world" in tools["browse_web_source"].inputSchema["properties"]["starting_point_id"]["enum"]
+    assert "digg-tech" not in tools["browse_web_source"].inputSchema["properties"]["starting_point_id"]["enum"]
+    assert tools["fetch_url"].inputSchema["properties"]["url"]["maxLength"] == 2048
+    assert tools["fetch_url"].inputSchema["properties"]["offset_bytes"]["minimum"] == 0
+
+
+def test_new_starting_points_disable_digg_without_mutating_legacy_runs() -> None:
+    current = load_starting_points()
+    legacy = load_starting_points("v0.1")
+
+    assert current.id == CURRENT_STARTING_POINTS_VERSION == "v0.2"
+    assert {point.id for point in current.starting_points} == {"wikipedia-current-events", "ap-world"}
+    assert "digg-tech" in {point.id for point in legacy.starting_points}
+    assert starting_points_sha256(current.id) == starting_points_sha256()
+
+
+def test_run_bound_starting_points_digest_fails_closed(tmp_path: Path) -> None:
+    manifest = _manifest().model_copy(
+        update={
+            "starting_points_version": CURRENT_STARTING_POINTS_VERSION,
+            "starting_points_sha256": "0" * 64,
+        }
+    )
+
+    with pytest.raises(WorldCapabilityError, match="does not match the run-bound digest"):
+        WorldCapabilityState(tmp_path, manifest, openrouter_api_key=None)
 
 
 def test_paid_research_tool_is_omitted_without_its_operator_credential(tmp_path: Path) -> None:

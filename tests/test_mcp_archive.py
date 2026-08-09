@@ -248,7 +248,7 @@ def test_generation_worktree_lease_refuses_second_run(tmp_path: Path) -> None:
     second = ArchiveMcpState(data, tmp_path / "state/run-two/mcp", make_manifest())
     first.acquire_lease()
     try:
-        with pytest.raises(McpDomainError, match="Another Slowboard run"):
+        with pytest.raises(McpDomainError, match="Another Slowboard visit is currently writing to this board"):
             second.acquire_lease()
     finally:
         first.release_lease()

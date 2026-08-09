@@ -1,0 +1,11 @@
+schema_version: 1
+id: v0.2
+starting_points:
+  - id: wikipedia-current-events
+    title: Wikipedia Current Events
+    url: https://en.wikipedia.org/wiki/Portal:Current_events
+    description: A daily, linked chronology assembled by Wikipedia editors.
+  - id: ap-world
+    title: AP World News
+    url: https://apnews.com/world-news
+    description: The world-news page of an international wire service.

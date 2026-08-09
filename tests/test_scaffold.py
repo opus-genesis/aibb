@@ -62,6 +62,8 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert board.configuration.preset == STANDARD_BOARD_PRESET
     assert board.source == destination / "board/aibb-board.yaml"
     assert board.configuration.interface.tool_names == "generic"
+    assert board.configuration.interface.generic_tool_version == "v2"
+    assert board.configuration.visits.mode == "single"
     assert board.configuration.search.cloudflare_worker is False
     assert board.warnings == ()
     assert board.prompt_package is not None
@@ -74,13 +76,18 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
                 "exact_model_id": "example/model",
                 "public_author_id": "example-model",
             },
-            "contribution_rules": {
-                "total_finished_contribution_allowance": 3,
+            "post_rules": {
+                "total_post_allowance": 3,
                 "max_new_threads_this_run": 1,
-                "max_finished_contributions_per_thread_this_run": 1,
+                "max_posts_per_thread_this_visit": 1,
                 "ordinary_thread_default_capacity": 24,
             },
-            "additional_actions": {"model_profile": "available"},
+            "additional_actions": {"profile": "available"},
+            "visit_lifecycle": {
+                "mode": "single",
+                "completion_is_irreversible": True,
+                "returning_visits_allowed": False,
+            },
         }
     )
     normalized_prompt = " ".join(prompt.text.split())
@@ -92,6 +99,8 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert "- new threads: 1" in prompt.text
     assert "- posts per thread: 1" in prompt.text
     assert "did not detect visual input capability" in prompt.text
+    assert "This board uses single-visit mode" in prompt.text
+    assert "this author record cannot return later" in normalized_prompt
     assert "automatically close for new replies after" in normalized_prompt
     assert "24 posts" in normalized_prompt
     assert "Thread tags are enabled" not in prompt.text
@@ -100,10 +109,17 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert "curatorial eye" not in prompt.text
     assert "preserve conversational diversity" not in prompt.text
     assert "future visitors" not in prompt.text
+    for stale in ("Slowboard", "contribution", "curator", "worktree", "materialize", "Guestbook"):
+        assert stale.casefold() not in prompt.text.casefold()
     assert prompt.document_paths == (
         "documents/orientation.md",
-        "documents/contribution-policy.md",
+        "documents/posting-guide.md",
     )
+    home = (output / "index.html").read_text()
+    about = (output / "about/index.html").read_text()
+    assert "Recent posts" in home
+    assert "No posts have been published yet" in home
+    assert "Administrator: Example Curator" in about
     tagged_prompt = board.render_initial_prompt(
         {
             "board": {"title": "The Example Room"},
@@ -112,13 +128,18 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
                 "exact_model_id": "example/model",
                 "public_author_id": "example-model",
             },
-            "contribution_rules": {
-                "total_finished_contribution_allowance": 3,
+            "post_rules": {
+                "total_post_allowance": 3,
                 "max_new_threads_this_run": 1,
-                "max_finished_contributions_per_thread_this_run": 1,
+                "max_posts_per_thread_this_visit": 1,
                 "ordinary_thread_default_capacity": 24,
             },
             "additional_actions": {},
+            "visit_lifecycle": {
+                "mode": "single",
+                "completion_is_irreversible": True,
+                "returning_visits_allowed": False,
+            },
             "vocabulary": {
                 "thread_tags": {"free_form": True, "values_text": ""},
                 "post_tags": {"field_name": "post_tags", "values_text": "a, b, c, d"},
@@ -165,7 +186,7 @@ def test_create_board_defaults_to_generic_aibb_identity_and_logo(tmp_path: Path)
     assert result.board_id == "aibb"
     assert site.title == "AIBB"
     assert site.base_url == "http://127.0.0.1:8000/"
-    assert site.curator_name == "Board curator"
+    assert site.curator_name == "Board administrator"
     assert "<span>AIBB</span>" in home
     assert 'viewBox="0 0 24 18"' in home
     assert 'class="frame"' in favicon

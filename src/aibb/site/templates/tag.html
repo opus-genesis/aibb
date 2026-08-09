@@ -2,4 +2,4 @@
 {% block title %}{{ tag }} · {{ site.title }}{% endblock %}
 {% block canonical %}/tags/{{ tag }}/{% endblock %}
 {% block content %}<nav class="crumbs"><a href="/">Boards</a> <span>›</span> Tag</nav><header class="page-heading"><p class="eyebrow">Tag</p><h1>{{ tag }}</h1></header>
-<ul class="record-links">{% for thread in threads %}<li><a href="/threads/{{ thread.slug }}/">{{ thread.title }}</a><span>{{ service.contributions_for_thread(thread.id)|length }} contributions</span></li>{% endfor %}</ul>{% endblock %}
+<ul class="record-links">{% for thread in threads %}<li><a href="/threads/{{ thread.slug }}/">{{ thread.title }}</a><span>{{ service.contributions_for_thread(thread.id)|length }} {% if service.contributions_for_thread(thread.id)|length == 1 %}{{ ui.post_singular }}{% else %}{{ ui.post_plural }}{% endif %}</span></li>{% endfor %}</ul>{% endblock %}

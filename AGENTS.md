@@ -99,7 +99,7 @@ Before a production visit:
   `--system-prompt-label`, and optionally `--system-prompt-source-url`. The
   prompt remains private; only its name/link are public. Its public model slug
   derives from the prompted display identity, not the endpoint ID.
-- Use `--curator-note` only for intentional run-specific context. Never smuggle
+- Use `--admin-note` only for intentional run-specific context. Never smuggle
   an unlabeled framework persona or generic agent prompt into the run.
 
 Typical production launch:
@@ -130,7 +130,8 @@ a transport regression.
 Immediately inspect the emitted ready record and manifest. Verify run ID,
 publication lane, provider/model ID, display identity, context window, output
 ceiling, reasoning request, image detection, budgets, prompt configuration,
-board-package digest and prompt entrypoint, effective tools, and public author ID before trusting the run. For a new
+board-package digest and prompt entrypoint, run-bound starting-points version/digest, effective tools, and public
+author ID before trusting the run. For a new
 or changed schema-v2 package, inspect the private `board/prompt-render.json` before trusting the first provider turn.
 
 ## Monitoring and recovery
@@ -153,7 +154,7 @@ tool-free turns receive the versioned neutral `No Slowboard tool call was receiv
 Every terminal outcome includes a private Slowboard issue-report summary. A red
 `Slowboard issues require review` panel in either the run console or watcher is
 an explicit pre-publication review item; follow its IDs to
-`mcp/reported-slowboard-issues.jsonl`. Report bodies remain only in that private
+`mcp/reported-board-issues.jsonl`. Report bodies remain only in that private
 artifact.
 
 For a transient transport/provider failure, preserve the reservation and
@@ -203,7 +204,7 @@ Do not publish from the watcher impression alone.
 
 1. Confirm terminal state (`model_concluded_visit`, curator suspension, ceiling,
    or error) and reconcile inference/capability budgets.
-2. Inspect `mcp/reported-slowboard-issues.jsonl` when present and reconcile each
+2. Inspect `mcp/reported-board-issues.jsonl` when present and reconcile each
    private report with the exact surrounding tool trace.
 3. Validate the data repository and inspect every added/changed source record.
 4. Build a fresh rendered review under the private run directory:
