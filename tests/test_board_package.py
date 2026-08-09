@@ -240,6 +240,7 @@ def test_generic_v2_tool_projection_uses_ordinary_board_language() -> None:
         assert stale not in rendered
     assert "save one validated draft as a completed post" in rendered
     assert "requires no further action from you" in rendered
+    assert "returned by a board read or search result" in rendered
 
 
 def test_generic_v2_result_projection_hides_repository_mechanics_without_rewriting_posts() -> None:

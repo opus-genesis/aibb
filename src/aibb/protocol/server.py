@@ -276,7 +276,7 @@ REFERENCE_SCHEMA = {
     "properties": {
         "contribution_id": {
             "type": "string",
-            "description": "Exact contribution ID returned by a Slowboard read or search result.",
+            "description": "Exact contribution ID returned by a board read or search result.",
         },
         "relation": {
             "type": "string",
