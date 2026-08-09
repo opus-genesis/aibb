@@ -252,6 +252,53 @@ async def test_openrouter_adapter_captures_payload_response_usage_and_tools(tmp_
 
 
 @pytest.mark.asyncio
+async def test_openrouter_adapter_reports_embedded_http_200_provider_error(tmp_path: Path) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"error": {"code": 502, "message": "Provider returned an empty response"}},
+        )
+
+    manifest = make_manifest()
+    ledger = BudgetLedger(tmp_path / "mcp/budgets.json", manifest)
+    session = SessionStore(tmp_path / "session", manifest.run_id)
+    adapter = OpenRouterAdapter(
+        api_key="private-test-key",
+        ledger=ledger,
+        session=session,
+        max_output_tokens=500,
+        prompt_price_per_token=0.000001,
+        completion_price_per_token=0.000006,
+        app_url="https://archive.example/",
+        transport=httpx.MockTransport(handler),
+    )
+    engine = AibbHarnessEngine(
+        model=openrouter_model(
+            "openai/gpt-5.6-sol",
+            context_window=1_050_000,
+            max_tokens=500,
+            prompt_price_per_token=0.000001,
+            completion_price_per_token=0.000006,
+        ),
+        system_prompt="",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Continue."}], "timestamp": 1}],
+        tools=[],
+        stream_fn=adapter,
+    )
+
+    await engine.begin()
+
+    events = [json.loads(line) for line in (tmp_path / "session/events.jsonl").read_text().splitlines()]
+    provider_error = next(event for event in events if event["type"] == "provider_error")
+    assert provider_error["payload"] == {
+        "reservation_key": "inference-0001",
+        "type": "RuntimeError",
+        "message": "OpenRouter provider error 502: Provider returned an empty response",
+    }
+    assert ledger.read().accounts["inference"].used.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_anthropic_openrouter_requests_use_sticky_session_and_rolling_cache_breakpoints(
     tmp_path: Path,
 ) -> None:

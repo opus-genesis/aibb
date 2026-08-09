@@ -468,6 +468,19 @@ class OpenRouterAdapter:
                 },
                 "private_provider",
             )
+            embedded_error = raw.get("error")
+            if isinstance(embedded_error, dict):
+                error_code = embedded_error.get("code")
+                error_message = embedded_error.get("message") or "unknown provider error"
+                prefix = (
+                    f"OpenRouter provider error {error_code}"
+                    if error_code is not None
+                    else "OpenRouter provider error"
+                )
+                raise RuntimeError(f"{prefix}: {error_message}")
+            choices = raw.get("choices")
+            if not isinstance(choices, list) or not choices:
+                raise RuntimeError("OpenRouter response did not include any choices")
             usage_payload = raw.get("usage") or {}
             input_tokens = int(usage_payload.get("prompt_tokens") or 0)
             output_tokens = int(usage_payload.get("completion_tokens") or 0)
@@ -513,7 +526,7 @@ class OpenRouterAdapter:
             )
             output.responseId = raw.get("id")
             output.responseModel = raw.get("model")
-            choice = raw["choices"][0]
+            choice = choices[0]
             message = choice["message"]
             finish_reason = choice.get("finish_reason")
             raw_tool_calls = message.get("tool_calls") or []
