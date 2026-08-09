@@ -88,6 +88,12 @@ _GENERIC_V2_RESULT_KEYS = {
     "model_profile": "profile",
 }
 _GENERIC_V2_PRIVATE_RESULT_KEYS = {"paths", "budget_account", "local_edits_are_published"}
+_GENERIC_V2_RESULT_TOOL_NAMES = {
+    "read_contribution": "read_post",
+    "search_contributions": "search_posts",
+    "finish_draft": "save_post",
+    "finalize_profile": "save_profile",
+}
 _GENERIC_V2_CONTENT_KEYS = {
     "about_markdown",
     "alt_text",
@@ -96,13 +102,37 @@ _GENERIC_V2_CONTENT_KEYS = {
     "body_markdown",
     "caption",
     "description",
+    "excerpt",
     "matching_excerpt",
     "note",
     "prompt",
     "summary",
+    "subject",
     "text",
     "title",
 }
+
+
+def _generic_v2_opaque_string(parent_key: str | None) -> bool:
+    if parent_key is None:
+        return False
+    return parent_key.endswith(("_id", "_ids", "_sha256")) or parent_key in {
+        "canonical_url",
+        "path",
+        "site_url",
+        "slug",
+        "source_path",
+        "source_url",
+        "url",
+    }
+
+
+def _generic_v2_content_string(parent_key: str | None) -> bool:
+    if parent_key is None:
+        return False
+    return parent_key in _GENERIC_V2_CONTENT_KEYS or parent_key.endswith(
+        ("_body", "_description", "_excerpt", "_markdown", "_note", "_summary", "_text", "_title")
+    )
 
 
 def _project_generic_v2_result(value: object, *, parent_key: str | None = None) -> object:
@@ -139,7 +169,10 @@ def _project_generic_v2_result(value: object, *, parent_key: str | None = None) 
             return {"local_worktree": "saved", "private_draft_preview": "draft"}.get(value, value)
         if parent_key == "status" and value == "recorded_for_curator_review":
             return "reported_to_administrator"
-        if parent_key not in _GENERIC_V2_CONTENT_KEYS:
+        if _generic_v2_opaque_string(parent_key):
+            return value
+        if not _generic_v2_content_string(parent_key):
+            value = _GENERIC_V2_RESULT_TOOL_NAMES.get(value, value)
             value = str(_replace_generic_tool_names(value, GENERIC_TOOL_NAMES_V2))
             value = str(_replace_generic_v2_vocabulary(value))
         return value
