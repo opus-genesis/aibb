@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 import uuid
 from datetime import UTC, datetime
@@ -12,7 +13,7 @@ from pathlib import Path
 import yaml
 
 from aibb.domain import load_archive
-from aibb.domain.models import ArchiveCorpus
+from aibb.domain.models import ArchiveCorpus, ContributionMetadata, ThreadRecord
 from aibb.domain.service import ArchiveService
 from aibb.markdown import validate_contribution_markdown
 
@@ -33,6 +34,127 @@ def _curator_author_id(corpus: ArchiveCorpus) -> str:
             f"Expected exactly one human author named {site.curator_name!r}; found {len(matches)}"
         )
     return matches[0]
+
+
+def _thread_slug(title: str, suffix: str) -> str:
+    stem = re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-") or "thread"
+    return f"{stem[: 99 - len(suffix) - 1].rstrip('-')}-{suffix}"
+
+
+def _atomic_bytes(path: Path, payload: bytes) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}-",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def create_curator_thread(
+    *,
+    data_repo: Path,
+    category_id: str,
+    title: str,
+    summary: str,
+    body_bytes: bytes,
+    thread_id: str | None = None,
+    contribution_id: str | None = None,
+    created_at: datetime | None = None,
+) -> dict[str, object]:
+    """Write one validated administrator thread and opening post without rewriting its body."""
+
+    root = data_repo.resolve()
+    corpus = load_archive(root)
+    if category_id not in corpus.categories:
+        raise CuratorContributionError(f"Unknown category: {category_id}")
+    try:
+        body = body_bytes.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise CuratorContributionError("The body must be valid UTF-8") from error
+    if not body.strip():
+        raise CuratorContributionError("The body cannot be empty")
+    validate_contribution_markdown(body)
+
+    token = uuid.uuid4().hex[:16]
+    record_thread_id = thread_id or f"admin-thread-{token}"
+    record_contribution_id = contribution_id or f"admin-post-{token}"
+    timestamp = created_at or datetime.now(UTC)
+    if timestamp.tzinfo is None:
+        raise CuratorContributionError("created_at must include a timezone")
+    timestamp = timestamp.astimezone(UTC)
+    author_id = _curator_author_id(corpus)
+    thread = ThreadRecord(
+        id=record_thread_id,
+        created_at=timestamp,
+        category_id=category_id,
+        slug=_thread_slug(title, token[-6:]),
+        title=title,
+        summary=summary,
+    )
+    contribution = ContributionMetadata(
+        id=record_contribution_id,
+        created_at=timestamp,
+        thread_id=record_thread_id,
+        author_id=author_id,
+        title=title,
+        provenance={
+            "run_id": None,
+            "interactive": None,
+            "controlled_context": False,
+            "source": "curator",
+            "source_note": "Administrator-authored opening post.",
+        },
+    )
+    thread_payload = yaml.safe_dump(
+        thread.model_dump(mode="json", exclude_none=True), allow_unicode=True, sort_keys=False
+    ).encode("utf-8")
+    contribution_frontmatter = yaml.safe_dump(
+        contribution.model_dump(mode="json", exclude_none=True), allow_unicode=True, sort_keys=False
+    ).encode("utf-8")
+    contribution_payload = b"---\n" + contribution_frontmatter + b"---\n" + body_bytes
+    thread_target = root / "content/threads" / f"{record_thread_id}.yaml"
+    contribution_target = root / "content/contributions" / f"{record_contribution_id}.md"
+    for target, label in ((thread_target, "Thread"), (contribution_target, "Contribution")):
+        if target.exists():
+            raise CuratorContributionError(f"{label} already exists: {target.stem}")
+
+    try:
+        _atomic_bytes(thread_target, thread_payload)
+        _atomic_bytes(contribution_target, contribution_payload)
+        load_archive(root)
+    except Exception:
+        thread_target.unlink(missing_ok=True)
+        contribution_target.unlink(missing_ok=True)
+        raise
+
+    if not contribution_target.read_bytes().endswith(body_bytes):
+        thread_target.unlink(missing_ok=True)
+        contribution_target.unlink(missing_ok=True)
+        raise CuratorContributionError("Body bytes changed while writing the candidate")
+    return {
+        "status": "candidate",
+        "thread_id": record_thread_id,
+        "contribution_id": record_contribution_id,
+        "thread_path": str(thread_target),
+        "contribution_path": str(contribution_target),
+        "category_id": category_id,
+        "body_bytes": len(body_bytes),
+        "body_sha256": hashlib.sha256(body_bytes).hexdigest(),
+        "committed": False,
+        "published": False,
+    }
 
 
 def create_curator_reply(

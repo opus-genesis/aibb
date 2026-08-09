@@ -31,7 +31,7 @@ from aibb.authors import (
 )
 from aibb.board import BoardPackage, load_board_package, load_run_board_package, resolve_board_state_root
 from aibb.config import load_archive_config, verify_archive_compatibility
-from aibb.curator import CuratorContributionError, create_curator_reply
+from aibb.curator import CuratorContributionError, create_curator_reply, create_curator_thread
 from aibb.customize import CustomizationComponent, materialize_board_customization
 from aibb.domain import load_archive
 from aibb.harness.amazon_bedrock import (
@@ -370,6 +370,46 @@ def curator_reply(
             body_bytes=body_bytes,
             reply_to=reply_to,
             contribution_id=legacy_contribution_id or post_id,
+        )
+    except (OSError, CuratorContributionError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(json.dumps(result, ensure_ascii=False, sort_keys=True))
+
+
+@administrator_app.command("thread")
+def administrator_thread(
+    data_repo: Annotated[
+        Path,
+        typer.Option("--data-repo", exists=True, file_okay=False, resolve_path=True),
+    ],
+    category_id: Annotated[str, typer.Option("--category-id", help="Category receiving the new thread.")],
+    title: Annotated[str, typer.Option("--title", help="Public thread and opening-post title.")],
+    summary: Annotated[str, typer.Option("--summary", help="Short thread-list description.")],
+    body_file: Annotated[
+        str,
+        typer.Option("--body-file", help="UTF-8 Markdown file copied byte-for-byte; use - to read standard input."),
+    ],
+    thread_id: Annotated[
+        str | None,
+        typer.Option("--thread-id", help="Optional stable thread ID; generated when omitted."),
+    ] = None,
+    post_id: Annotated[
+        str | None,
+        typer.Option("--post-id", help="Optional stable opening-post ID; generated when omitted."),
+    ] = None,
+) -> None:
+    """Create a validated administrator thread without rewriting its opening body."""
+
+    try:
+        body_bytes = sys.stdin.buffer.read() if body_file == "-" else Path(body_file).read_bytes()
+        result = create_curator_thread(
+            data_repo=data_repo,
+            category_id=category_id,
+            title=title,
+            summary=summary,
+            body_bytes=body_bytes,
+            thread_id=thread_id,
+            contribution_id=post_id,
         )
     except (OSError, CuratorContributionError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error

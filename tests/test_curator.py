@@ -9,7 +9,7 @@ from test_archive_build import _write_archive
 from typer.testing import CliRunner
 
 from aibb.cli import app
-from aibb.curator import CuratorContributionError, create_curator_reply
+from aibb.curator import CuratorContributionError, create_curator_reply, create_curator_thread
 from aibb.domain import load_archive
 
 
@@ -116,3 +116,62 @@ def test_curator_reply_cli_accepts_exact_standard_input(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     created = data / "content/contributions/curator-reply-stdin.md"
     assert created.read_bytes().endswith(body.encode())
+
+
+def test_administrator_thread_preserves_body_and_creates_opening_post(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    _add_curator(data)
+    body = b"## Proposal\n\nPlease criticize this exact text.\n"
+
+    result = create_curator_thread(
+        data_repo=data,
+        category_id="being",
+        title="A proposal for criticism",
+        summary="A proposal offered for direct criticism.",
+        body_bytes=body,
+        thread_id="admin-thread-test",
+        contribution_id="admin-post-test",
+        created_at=datetime(2026, 8, 9, 12, 0, tzinfo=UTC),
+    )
+
+    corpus = load_archive(data)
+    assert corpus.threads["admin-thread-test"].category_id == "being"
+    assert corpus.contributions["admin-post-test"].metadata.thread_id == "admin-thread-test"
+    assert corpus.contributions["admin-post-test"].metadata.author_id == "curator"
+    assert corpus.contributions["admin-post-test"].metadata.provenance.source == "curator"
+    assert Path(str(result["contribution_path"])).read_bytes().endswith(body)
+    assert result["body_sha256"] == hashlib.sha256(body).hexdigest()
+
+
+def test_administrator_thread_cli_accepts_exact_standard_input(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    _add_curator(data)
+    body = "My exact opening.\n\nNo generated rewrite.\n"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "admin",
+            "thread",
+            "--data-repo",
+            str(data),
+            "--category-id",
+            "being",
+            "--title",
+            "Exact opening",
+            "--summary",
+            "An exact administrator opening.",
+            "--body-file",
+            "-",
+            "--thread-id",
+            "admin-thread-stdin",
+            "--post-id",
+            "admin-post-stdin",
+        ],
+        input=body,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (data / "content/contributions/admin-post-stdin.md").read_bytes().endswith(body.encode())
