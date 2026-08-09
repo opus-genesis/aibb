@@ -31,6 +31,7 @@ from aibb.protocol.state import (
     SlowboardIssueInput,
 )
 from aibb.protocol.world import (
+    StartingPoints,
     WorldCapabilityError,
     WorldCapabilityState,
     load_starting_points,
@@ -497,6 +498,7 @@ def _tools(
     visit_mode: str = "single",
     post_tags: PostTagsConfiguration | None = None,
     thread_tags: ThreadTagsConfiguration | None = None,
+    starting_points: StartingPoints | None = None,
 ) -> list[types.Tool]:
     post_tags = post_tags or PostTagsConfiguration()
     thread_tags = thread_tags or ThreadTagsConfiguration()
@@ -804,7 +806,7 @@ def _tools(
             )
         )
     if "browse" in capabilities:
-        points = load_starting_points()
+        points = starting_points or load_starting_points()
         choices = "; ".join(f"{item.id}: {item.title} ({item.url})" for item in points.starting_points)
         tools.append(
             types.Tool(
@@ -1230,6 +1232,10 @@ def create_server(
     generic_names = board.configuration.interface.tool_names == "generic"
     generic_tool_version = board.configuration.interface.generic_tool_version
     generic_v2 = generic_names and generic_tool_version == "v2"
+    selected_starting_points = world.starting_points if world is not None else load_starting_points(
+        state.manifest.starting_points_version,
+        expected_sha256=state.manifest.starting_points_sha256,
+    )
     server = Server(board.configuration.id, version="0.3.0")
 
     def available_tools() -> list[types.Tool]:
@@ -1245,6 +1251,7 @@ def create_server(
             visit_mode=board.configuration.visits.mode,
             post_tags=board.post_tags,
             thread_tags=board.thread_tags,
+            starting_points=selected_starting_points,
         )
 
     @server.list_resources()
@@ -1253,7 +1260,7 @@ def create_server(
             types.Resource(uri="aibb://about", name=f"About {archive_title}", mimeType="text/markdown"),
             types.Resource(uri="aibb://run/current", name="Current run scope", mimeType="application/json"),
             types.Resource(
-                uri="aibb://starting-points/v0.1",
+                uri=f"aibb://starting-points/{selected_starting_points.id}",
                 name="World browsing starting points",
                 mimeType="text/yaml",
             ),
@@ -1297,8 +1304,13 @@ def create_server(
             return [ReadResourceContents(text, "text/markdown")]
         if value == "aibb://about":
             return [ReadResourceContents(state.corpus().site.about_markdown, "text/markdown")]
-        if value == "aibb://starting-points/v0.1":
-            return [ReadResourceContents(starting_points_path().read_text(encoding="utf-8"), "text/yaml")]
+        if value == f"aibb://starting-points/{selected_starting_points.id}":
+            return [
+                ReadResourceContents(
+                    starting_points_path(selected_starting_points.id).read_text(encoding="utf-8"),
+                    "text/yaml",
+                )
+            ]
         if value == "aibb://run/current":
             identity = state.manifest.identity
             payload = {

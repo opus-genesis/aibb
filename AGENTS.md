@@ -130,7 +130,8 @@ a transport regression.
 Immediately inspect the emitted ready record and manifest. Verify run ID,
 publication lane, provider/model ID, display identity, context window, output
 ceiling, reasoning request, image detection, budgets, prompt configuration,
-board-package digest and prompt entrypoint, effective tools, and public author ID before trusting the run. For a new
+board-package digest and prompt entrypoint, run-bound starting-points version/digest, effective tools, and public
+author ID before trusting the run. For a new
 or changed schema-v2 package, inspect the private `board/prompt-render.json` before trusting the first provider turn.
 
 ## Monitoring and recovery

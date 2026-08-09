@@ -160,6 +160,8 @@ def test_new_generic_board_omits_guestbook_budget_without_quota_exempt_thread(tm
 
     assert "guestbook_entries" not in manifest.capability_budgets
     assert manifest.capability_budgets["contributions"].max_calls == 2
+    assert manifest.starting_points_version == "v0.2"
+    assert manifest.starting_points_sha256 is not None
 
 
 def test_generic_cli_help_uses_board_vocabulary_and_keeps_legacy_flags_hidden() -> None:

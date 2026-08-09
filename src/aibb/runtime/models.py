@@ -119,6 +119,8 @@ class RunManifest(BaseModel):
     notice_version: str | None = None
     policy_version: str | None = None
     prompt_entrypoint: str | None = None
+    starting_points_version: str = Field(default="v0.1", pattern=r"^v[0-9]+\.[0-9]+$")
+    starting_points_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     calendar_date: date | None = None
     calendar_utc_offset: str = Field(default="+00:00", pattern=r"^[+-](?:0\d|1\d|2[0-3]):[0-5]\d$")
     contribution_quota: int = Field(default=2, ge=0)

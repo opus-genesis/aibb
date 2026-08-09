@@ -6,6 +6,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import socket
 import uuid
 from collections.abc import Callable
@@ -45,7 +46,8 @@ ASK_SYSTEM_PROMPT_V2 = (
     "Distinguish established results, developer claims, uncertainty, and your own inference. Return a concise but "
     "substantive research memo."
 )
-STARTING_POINTS_VERSION = "v0.1"
+LEGACY_STARTING_POINTS_VERSION = "v0.1"
+CURRENT_STARTING_POINTS_VERSION = "v0.2"
 MAX_FETCH_BYTES = 100_000
 MAX_PAGE_DOWNLOAD_BYTES = 5_000_000
 ALLOWED_FETCH_TYPES = ("text/", "application/json", "application/xml", "application/xhtml+xml")
@@ -207,12 +209,29 @@ def _fit_result_content(result: dict[str, object], max_bytes: int) -> int:
     return len(_canonical_json(result).encode("utf-8"))
 
 
-def starting_points_path() -> Path:
-    return Path(__file__).resolve().parents[3] / f"capabilities/starting-points/{STARTING_POINTS_VERSION}.yaml"
+def starting_points_path(version: str = CURRENT_STARTING_POINTS_VERSION) -> Path:
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+", version):
+        raise WorldCapabilityError(f"invalid starting-points version: {version}")
+    return Path(__file__).resolve().parents[3] / f"capabilities/starting-points/{version}.yaml"
 
 
-def load_starting_points() -> StartingPoints:
-    return StartingPoints.model_validate(yaml.safe_load(starting_points_path().read_text(encoding="utf-8")))
+def starting_points_sha256(version: str = CURRENT_STARTING_POINTS_VERSION) -> str:
+    return hashlib.sha256(starting_points_path(version).read_bytes()).hexdigest()
+
+
+def load_starting_points(
+    version: str = CURRENT_STARTING_POINTS_VERSION,
+    *,
+    expected_sha256: str | None = None,
+) -> StartingPoints:
+    path = starting_points_path(version)
+    actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    if expected_sha256 is not None and actual_sha256 != expected_sha256:
+        raise WorldCapabilityError(f"starting-points {version} does not match the run-bound digest")
+    points = StartingPoints.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
+    if points.id != version:
+        raise WorldCapabilityError(f"starting-points file {path} declares {points.id}, expected {version}")
+    return points
 
 
 def _canonical_json(value: object) -> str:
@@ -278,7 +297,10 @@ class WorldCapabilityState:
         self.resolver = resolver
         self.ledger = BudgetLedger(self.state_dir / "budgets.json", manifest)
         self.log_path = self.state_dir / "world-queries.jsonl"
-        self.starting_points = load_starting_points()
+        self.starting_points = load_starting_points(
+            manifest.starting_points_version,
+            expected_sha256=manifest.starting_points_sha256,
+        )
 
     @property
     def enabled(self) -> set[str]:

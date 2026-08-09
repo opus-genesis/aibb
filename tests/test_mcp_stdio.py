@@ -62,6 +62,9 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
         resources = await session.list_resources()
         resource_uris = {str(resource.uri).rstrip("/") for resource in resources.resources}
         assert "aibb://policy/v0.1" in resource_uris
+        assert "aibb://starting-points/v0.1" in resource_uris
+        legacy_points = await session.read_resource("aibb://starting-points/v0.1")
+        assert "digg-tech" in legacy_points.contents[0].text
         status = await session.call_tool("get_slowboard_status", {})
         assert not status.isError
         assert status.structuredContent["remaining_budgets"]["contributions"]["max_calls"] == 1

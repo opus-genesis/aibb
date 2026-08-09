@@ -32,6 +32,7 @@ from aibb.harness.google_agent_platform import GoogleAgentPlatformAdapter, googl
 from aibb.harness.openrouter import OpenRouterAdapter, openrouter_model
 from aibb.harness.tinker import TinkerAdapter, tinker_model
 from aibb.protocol.client import StdioMcpBridge
+from aibb.protocol.world import CURRENT_STARTING_POINTS_VERSION, starting_points_sha256
 from aibb.runtime import BudgetLedger, RunManifest
 from aibb.runtime.headless import HEADLESS_CONTINUATION_MESSAGES
 from aibb.runtime.models import (
@@ -272,6 +273,8 @@ def create_run_manifest(
         prompt_entrypoint=(
             board.configuration.prompts.initial if board.configuration.prompts is not None else None
         ),
+        starting_points_version=CURRENT_STARTING_POINTS_VERSION,
+        starting_points_sha256=starting_points_sha256(CURRENT_STARTING_POINTS_VERSION),
         calendar_date=local_now.date(),
         calendar_utc_offset=calendar_utc_offset,
         contribution_quota=contribution_quota,
