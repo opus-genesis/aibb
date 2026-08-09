@@ -165,9 +165,10 @@ def test_new_generic_board_omits_guestbook_budget_without_quota_exempt_thread(tm
 
 
 def test_generic_cli_help_uses_board_vocabulary_and_keeps_legacy_flags_hidden() -> None:
-    root_help = CliRunner().invoke(app, ["--help"])
-    run_help = CliRunner().invoke(app, ["run", "--help"])
-    new_board_help = CliRunner().invoke(app, ["new-board", "--help"])
+    runner = CliRunner()
+    root_help = runner.invoke(app, ["--help"], terminal_width=160)
+    run_help = runner.invoke(app, ["run", "--help"], terminal_width=160)
+    new_board_help = runner.invoke(app, ["new-board", "--help"], terminal_width=160)
 
     assert root_help.exit_code == run_help.exit_code == new_board_help.exit_code == 0
     assert "admin" in root_help.output
