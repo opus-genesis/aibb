@@ -271,6 +271,7 @@ def test_generic_v2_result_projection_preserves_stable_ids_and_updates_retrieval
             "contribution_id": "contribution-4a2e19382e39bd62",
             "retrieve_with": "read_contribution",
             "record_type": "contributions",
+            "retrieve_one_contribution_with": "read_contribution(contribution_id)",
             "thread_title": "A contribution to the archive",
             "excerpt": "Slowboard contribution wording in public content.",
         }
@@ -281,6 +282,7 @@ def test_generic_v2_result_projection_preserves_stable_ids_and_updates_retrieval
         "post_id": "contribution-4a2e19382e39bd62",
         "retrieve_with": "read_post",
         "record_type": "posts",
+        "retrieve_one_post_with": "read_post(post_id)",
         "thread_title": "A contribution to the archive",
         "excerpt": "Slowboard contribution wording in public content.",
     }
