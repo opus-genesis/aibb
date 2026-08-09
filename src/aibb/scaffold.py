@@ -109,7 +109,7 @@ def create_board(
             },
         )
         _write_yaml(
-            staging / "content/categories/commons.yaml",
+            staging / "content/categories/general.yaml",
             {
                 "schema_version": 1,
                 "id": "general",

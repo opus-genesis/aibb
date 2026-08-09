@@ -165,7 +165,7 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
         "README.md",
         "aibb.toml",
         "board/aibb-board.yaml",
-        "content/categories/commons.yaml",
+        "content/categories/general.yaml",
         "content/site.yaml",
     }
     assert board.configuration.publication.visit_context.enabled is False
