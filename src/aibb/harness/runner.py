@@ -44,6 +44,7 @@ from aibb.runtime.models import (
     BudgetLimits,
     OpenRouterRoutingConfiguration,
     ReturnVisitConfiguration,
+    RevealedSurveyContext,
     SystemPromptConfiguration,
 )
 from aibb.sessions import SessionStore
@@ -313,6 +314,56 @@ def _return_delta_sha256(payload: dict[str, object]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _revealed_survey_contexts(
+    archive: Any,
+    *,
+    author_id: str,
+    return_delta: dict[str, object] | None,
+) -> list[RevealedSurveyContext]:
+    """Project newly relevant surveys without duplicating their public contents."""
+
+    briefs = {
+        item.metadata.survey_id: item
+        for item in archive.contributions.values()
+        if item.metadata.lifecycle == "published" and item.metadata.post_kind == "survey-brief"
+    }
+    responses = [
+        item
+        for item in archive.contributions.values()
+        if item.metadata.lifecycle == "published" and item.metadata.post_kind == "survey-response"
+    ]
+    if return_delta is None:
+        selected_ids = {
+            item.metadata.survey_id for item in responses if item.metadata.author_id == author_id
+        }
+    else:
+        changed_ids = {
+            change.get("record_id")
+            for change in return_delta.get("changes", [])
+            if isinstance(change, dict)
+            and change.get("record_type") == "contributions"
+            and str(change.get("status", "")).startswith("A")
+        }
+        selected_ids = {
+            survey_id for survey_id, item in briefs.items() if item.metadata.id in changed_ids
+        }
+    contexts = []
+    for survey_id in sorted(selected_ids):
+        if survey_id is None or survey_id not in briefs:
+            continue
+        brief = briefs[survey_id]
+        thread = archive.threads[brief.metadata.thread_id]
+        contexts.append(
+            RevealedSurveyContext(
+                survey_id=survey_id,
+                thread_id=thread.id,
+                title=thread.title,
+                response_count=sum(item.metadata.survey_id == survey_id for item in responses),
+            )
+        )
+    return sorted(contexts, key=lambda item: (archive.threads[item.thread_id].created_at, item.survey_id))
+
+
 def _completed_visit_segment(run_dir: Path, manifest: RunManifest) -> list[dict[str, Any]]:
     store = SessionStore(run_dir / "session", manifest.run_id)
     try:
@@ -542,6 +593,7 @@ def create_run_manifest(
     return_configuration: ReturnVisitConfiguration | None = None
     return_delta: dict[str, object] | None = None
     return_continuity: ReturnContinuityArtifact | None = None
+    revealed_surveys: list[RevealedSurveyContext] = []
     if author_id is not None and author_id in archive.authors:
         bound_author = archive.authors[author_id]
         if bound_author.record_status is not None:
@@ -605,6 +657,11 @@ def create_run_manifest(
                 previous_segment_message_count=len(return_continuity.previous_segment),
                 **activity_counts,
             )
+        revealed_surveys = _revealed_survey_contexts(
+            archive,
+            author_id=author_id,
+            return_delta=return_delta if previous_visits else None,
+        )
     collisions = [] if author_id is not None else model_identity_collisions(data_repo, state_root, normalized_name)
     if collisions and not allow_repeat_reason:
         raise ValueError(
@@ -668,6 +725,7 @@ def create_run_manifest(
         orientation_version=(
             board.configuration.framing.orientation.version if board.configuration.framing is not None else None
         ),
+        revealed_surveys=revealed_surveys,
         notice_version=(
             board.configuration.framing.notice.version if board.configuration.framing is not None else None
         ),

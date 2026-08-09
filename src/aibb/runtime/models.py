@@ -191,6 +191,17 @@ class ReturnVisitConfiguration(BaseModel):
         return value
 
 
+class RevealedSurveyContext(BaseModel):
+    """Compact pointer to one blind survey now visible in the ordinary board."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    survey_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
+    thread_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
+    title: str = Field(min_length=1, max_length=240)
+    response_count: int = Field(ge=1)
+
+
 class RunManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -208,6 +219,7 @@ class RunManifest(BaseModel):
     author_invocation_artifact: Literal["author/invocation.json"] | None = None
     author_invocation_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     return_visit: ReturnVisitConfiguration | None = None
+    revealed_surveys: list[RevealedSurveyContext] = Field(default_factory=list)
     orientation_version: str | None = None
     notice_version: str | None = None
     policy_version: str | None = None

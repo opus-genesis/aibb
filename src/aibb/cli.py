@@ -83,7 +83,7 @@ from aibb.site import build_site
 from aibb.starter import initialize_data_repo
 from aibb.surveys import (
     SurveyError,
-    ask_survey_openrouter,
+    ask_survey,
     create_survey,
     list_surveys,
     reveal_survey,
@@ -1294,6 +1294,10 @@ def create_blind_survey(
         typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
     ] = Path("."),
     title: Annotated[str, typer.Option("--title", help="Public thread title used when the survey is revealed.")] = ...,
+    category_id: Annotated[
+        str | None,
+        typer.Option("--category", help="Category for the revealed survey thread; defaults to the first category."),
+    ] = None,
     document: Annotated[
         Path,
         typer.Option("--document", exists=True, file_okay=True, dir_okay=False, readable=True, resolve_path=True),
@@ -1309,6 +1313,7 @@ def create_blind_survey(
             state_root=resolved_state,
             title=title,
             document_bytes=document.read_bytes(),
+            category_id=category_id,
         )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
@@ -1354,18 +1359,15 @@ def ask_blind_survey(
 ) -> None:
     """Ask one registered author for a one-turn response with no board or peer context."""
 
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key:
-        raise typer.BadParameter("OPENROUTER_API_KEY is not set")
     resolved_state = _resolve_cli_state_root(board, state_root)
     try:
         response = asyncio.run(
-            ask_survey_openrouter(
+            ask_survey(
                 data_repo=board,
                 state_root=resolved_state,
                 survey_id=survey_id,
                 author_id=author_id,
-                api_key=api_key,
+                environment=dict(os.environ),
                 max_output_tokens=max_output_tokens,
                 max_cost_usd=max_cost_usd,
             )

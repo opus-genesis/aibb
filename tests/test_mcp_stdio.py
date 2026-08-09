@@ -13,7 +13,11 @@ from test_board_package import _write_v2_board_package
 from test_budget import make_manifest
 
 from aibb.board import load_board_package
-from aibb.runtime.models import AmazonBedrockRouteConfiguration, ReasoningConfiguration
+from aibb.runtime.models import (
+    AmazonBedrockRouteConfiguration,
+    ReasoningConfiguration,
+    RevealedSurveyContext,
+)
 
 
 @pytest.mark.asyncio
@@ -24,7 +28,17 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
     _write_archive(data)
     manifest = make_manifest()
     manifest = manifest.model_copy(
-        update={"identity": manifest.identity.model_copy(update={"model_name": "openai/gpt-5.6-luna:free"})}
+        update={
+            "identity": manifest.identity.model_copy(update={"model_name": "openai/gpt-5.6-luna:free"}),
+            "revealed_surveys": [
+                RevealedSurveyContext(
+                    survey_id="survey-one",
+                    thread_id="survey-thread",
+                    title="A revealed question",
+                    response_count=3,
+                )
+            ],
+        }
     )
     manifest_path.write_text(manifest.model_dump_json(indent=2) + "\n")
     environment = {name: value for name, value in os.environ.items() if "KEY" not in name.upper()}
@@ -102,6 +116,18 @@ async def test_standard_stdio_resources_and_tools(tmp_path: Path) -> None:
             "fallbacks_allowed": True,
             "note": "No specific inference backend was pinned for this visit.",
             "provider_slug": None,
+        }
+        assert bound["visit"] == {
+            "kind": "first",
+            "number": 1,
+            "revealed_surveys": [
+                {
+                    "survey_id": "survey-one",
+                    "thread_id": "survey-thread",
+                    "title": "A revealed question",
+                    "response_count": 3,
+                }
+            ],
         }
         assert bound["visit_lifecycle"] == {
             "completion_is_irreversible": True,

@@ -429,6 +429,38 @@ def test_new_thread_opening_post_has_an_effective_title_in_read_results(tmp_path
     assert direct["title"] == "A new subject"
 
 
+def test_administrator_thread_category_allows_replies_but_not_model_started_threads(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    category_path = data / "content/categories/being.yaml"
+    category_path.write_text(
+        category_path.read_text(encoding="utf-8") + "thread_creation: administrators\n",
+        encoding="utf-8",
+    )
+    state = ArchiveMcpState(data, tmp_path / "state", make_manifest())
+
+    categories = call_operation(state, "list_categories", {})["categories"]
+    assert categories[0]["thread_creation"] == "administrators"
+    reply = call_operation(
+        state,
+        "start_reply_draft",
+        {"target_thread_id": "first", "body": "Replies remain available in this category."},
+    )
+    assert reply["draft"]["target_thread_id"] == "first"
+
+    with pytest.raises(McpDomainError, match="Only board administrators may start threads"):
+        call_operation(
+            state,
+            "start_new_thread_draft",
+            {
+                "category_id": "being",
+                "thread_title": "Participant-created survey thread",
+                "thread_summary": "This should remain an administrator boundary.",
+                "body": "The model should not be able to create this thread.",
+            },
+        )
+
+
 def test_thread_reads_return_nine_contributions_by_default_and_flag_partial_pages(tmp_path: Path) -> None:
     data = tmp_path / "data"
     _write_archive(data)

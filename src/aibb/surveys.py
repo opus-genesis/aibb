@@ -10,28 +10,47 @@ import subprocess
 import tempfile
 import time
 import uuid
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
 import httpx
 import yaml
-from harn_ai.types import TextContent, UserMessage
+from harn_ai.types import Model, TextContent, UserMessage
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from aibb.authors import load_author_invocation, load_author_system_prompt, save_author_invocation
 from aibb.board import load_board_package
 from aibb.domain import load_archive
 from aibb.domain.models import AuthorRecord, ContributionMetadata, ThreadRecord
+from aibb.harness.amazon_bedrock import (
+    AmazonBedrockAdapter,
+    amazon_bedrock_model,
+    bedrock_credential_source,
+    bedrock_endpoint,
+)
+from aibb.harness.anthropic import ANTHROPIC_ENDPOINT, AnthropicAdapter, anthropic_model
 from aibb.harness.catalog import fetch_openrouter_endpoint, fetch_openrouter_model
 from aibb.harness.engine import AibbHarnessEngine
+from aibb.harness.google_agent_platform import (
+    GROK_4_1_FAST_CONTEXT_WINDOW,
+    GoogleAgentPlatformAdapter,
+    google_agent_platform_endpoint,
+    google_agent_platform_model,
+)
 from aibb.harness.openrouter import OPENROUTER_ENDPOINT, OpenRouterAdapter, openrouter_model
+from aibb.harness.tinker import TINKER_ANTHROPIC_ENDPOINT, TinkerAdapter, tinker_model
 from aibb.markdown import validate_contribution_markdown
 from aibb.runtime import BudgetLedger, RunManifest
 from aibb.runtime.models import (
+    AmazonBedrockRouteConfiguration,
+    AuthorInvocation,
     BoundModelIdentity,
     BudgetLimits,
     OpenRouterRoutingConfiguration,
+    ReasoningConfiguration,
     SystemPromptConfiguration,
 )
 from aibb.sessions import SessionStore
@@ -51,6 +70,7 @@ class SurveyRecord(BaseModel):
     survey_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
     board_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
     title: str = Field(min_length=1, max_length=240)
+    category_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
     created_at: datetime
     document_artifact: Literal["document.md"] = "document.md"
     document_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -82,6 +102,18 @@ class SurveyResponse(BaseModel):
     response_model: str | None = None
     run_id: str
     author_invocation_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+@dataclass(frozen=True, slots=True)
+class SurveyProviderResolution:
+    model: Model
+    endpoint: str
+    reasoning: ReasoningConfiguration
+    prompt_price_per_token: float
+    completion_price_per_token: float
+    openrouter_routing: OpenRouterRoutingConfiguration | None = None
+    amazon_bedrock_routing: AmazonBedrockRouteConfiguration | None = None
+    output_token_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
 
 
 def _slug(value: str, limit: int = 79) -> str:
@@ -130,7 +162,14 @@ def list_surveys(state_root: Path, *, board_id: str | None = None) -> list[Surve
     return [survey for survey in surveys if board_id is None or survey.board_id == board_id]
 
 
-def create_survey(*, data_repo: Path, state_root: Path, title: str, document_bytes: bytes) -> SurveyRecord:
+def create_survey(
+    *,
+    data_repo: Path,
+    state_root: Path,
+    title: str,
+    document_bytes: bytes,
+    category_id: str | None = None,
+) -> SurveyRecord:
     try:
         document = document_bytes.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -139,12 +178,16 @@ def create_survey(*, data_repo: Path, state_root: Path, title: str, document_byt
         raise SurveyError("Survey documents cannot be empty")
     validate_contribution_markdown(document)
     board_id = load_board_package(data_repo).configuration.id
+    corpus = load_archive(data_repo)
+    if category_id is not None and category_id not in corpus.categories:
+        raise SurveyError(f"Unknown survey category: {category_id}")
     now = datetime.now(UTC)
     survey_id = _slug(f"{title}-{uuid.uuid4().hex[:8]}")
     record = SurveyRecord(
         survey_id=survey_id,
         board_id=board_id,
         title=title,
+        category_id=category_id,
         created_at=now,
         document_sha256=hashlib.sha256(document_bytes).hexdigest(),
     )
@@ -184,16 +227,283 @@ def _response_text(messages: list[dict[str, object]]) -> tuple[str, str | None]:
     return "", None
 
 
-async def ask_survey_openrouter(
+def _provider_api_key(
+    invocation: AuthorInvocation,
+    environment: Mapping[str, str],
+    explicit_api_key: str | None,
+) -> str | None:
+    if explicit_api_key is not None:
+        return explicit_api_key
+    key_name = {
+        "openrouter": "OPENROUTER_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "tinker": "TINKER_API_KEY",
+        "google_agent_platform": "GOOGLE_API_KEY",
+    }.get(invocation.provider)
+    if key_name is not None:
+        value = environment.get(key_name)
+        if not value:
+            raise SurveyError(f"{key_name} is not set")
+        return value
+    if invocation.provider == "amazon-bedrock":
+        if bedrock_credential_source(dict(environment)) is None:
+            raise SurveyError(
+                "Configure AWS_BEARER_TOKEN_BEDROCK, AWS_PROFILE, or another supported AWS role credential first"
+            )
+        return environment.get("AWS_BEARER_TOKEN_BEDROCK")
+    raise SurveyError(f"Unsupported survey inference provider: {invocation.provider}")
+
+
+async def _resolve_survey_provider(
+    invocation: AuthorInvocation,
+    *,
+    max_output_tokens: int,
+    environment: Mapping[str, str],
+    transport: httpx.AsyncBaseTransport | None,
+) -> SurveyProviderResolution:
+    if invocation.provider == "openrouter":
+        catalog = await fetch_openrouter_model(invocation.model_name, transport=transport)
+        endpoint_catalog = (
+            await fetch_openrouter_endpoint(
+                invocation.model_name,
+                invocation.openrouter_provider,
+                transport=transport,
+            )
+            if invocation.openrouter_provider
+            else None
+        )
+        reasoning = invocation.reasoning or catalog.select_reasoning(invocation.reasoning_mode)
+        context_window = min(
+            catalog.effective_context_length,
+            endpoint_catalog.context_length if endpoint_catalog else catalog.effective_context_length,
+        )
+        output_tokens = min(
+            max_output_tokens,
+            (
+                endpoint_catalog.max_completion_tokens
+                if endpoint_catalog and endpoint_catalog.max_completion_tokens
+                else catalog.clamp_output_tokens(max_output_tokens)
+            ),
+        )
+        prompt_price = endpoint_catalog.prompt_price if endpoint_catalog else catalog.prompt_price
+        completion_price = endpoint_catalog.completion_price if endpoint_catalog else catalog.completion_price
+        route = (
+            OpenRouterRoutingConfiguration(
+                provider_slug=invocation.openrouter_provider,
+                provider_name=endpoint_catalog.provider_name,
+                quantization=endpoint_catalog.quantization,
+            )
+            if endpoint_catalog and invocation.openrouter_provider
+            else None
+        )
+        return SurveyProviderResolution(
+            model=openrouter_model(
+                invocation.model_name,
+                context_window=context_window,
+                max_tokens=output_tokens,
+                prompt_price_per_token=prompt_price,
+                completion_price_per_token=completion_price,
+                reasoning_enabled=reasoning.enabled,
+            ),
+            endpoint=OPENROUTER_ENDPOINT,
+            reasoning=reasoning,
+            prompt_price_per_token=prompt_price,
+            completion_price_per_token=completion_price,
+            openrouter_routing=route,
+            output_token_parameter=endpoint_catalog.output_token_parameter if endpoint_catalog else "max_tokens",
+        )
+
+    if invocation.provider == "anthropic":
+        model = anthropic_model(invocation.model_name)
+        if invocation.reasoning is None:
+            if invocation.reasoning_mode not in {"auto", "disabled"}:
+                raise SurveyError(f"{invocation.model_name} does not support Anthropic extended thinking")
+            reasoning = ReasoningConfiguration(enabled=False, source="unavailable")
+        else:
+            reasoning = invocation.reasoning
+        output_tokens = min(max_output_tokens, model.maxTokens, model.contextWindow)
+        return SurveyProviderResolution(
+            model=model.model_copy(update={"maxTokens": output_tokens}),
+            endpoint=ANTHROPIC_ENDPOINT,
+            reasoning=reasoning,
+            prompt_price_per_token=model.cost.input / 1_000_000,
+            completion_price_per_token=model.cost.output / 1_000_000,
+        )
+
+    if invocation.provider == "tinker":
+        model = tinker_model(invocation.model_name)
+        if invocation.reasoning is None:
+            if invocation.reasoning_mode == "mandatory":
+                raise SurveyError("Tinker reasoning is controllable rather than mandatory")
+            reasoning_enabled = invocation.reasoning_mode != "disabled"
+            reasoning = ReasoningConfiguration(
+                enabled=reasoning_enabled,
+                supported_efforts=["low", "medium", "high", "xhigh", "max"],
+                selected_effort="high" if reasoning_enabled else None,
+                request_parameter=(
+                    {"output_config": {"effort": "high"}}
+                    if reasoning_enabled
+                    else {"thinking": {"type": "disabled"}}
+                ),
+                source="tinker-catalog" if invocation.reasoning_mode == "auto" else "curator-override",
+            )
+        else:
+            reasoning = invocation.reasoning
+        output_tokens = min(max_output_tokens, model.maxTokens, model.contextWindow)
+        return SurveyProviderResolution(
+            model=model.model_copy(update={"maxTokens": output_tokens}),
+            endpoint=TINKER_ANTHROPIC_ENDPOINT,
+            reasoning=reasoning,
+            prompt_price_per_token=model.cost.input / 1_000_000,
+            completion_price_per_token=model.cost.output / 1_000_000,
+        )
+
+    if invocation.provider == "amazon-bedrock":
+        if invocation.bedrock_region is None:
+            raise SurveyError("Amazon Bedrock authors require an immutable region")
+        model = amazon_bedrock_model(
+            invocation.model_name,
+            region=invocation.bedrock_region,
+            max_tokens=max_output_tokens,
+        )
+        if invocation.reasoning is None:
+            if model.reasoning:
+                if invocation.reasoning_mode == "mandatory":
+                    raise SurveyError("Bedrock extended thinking is optional rather than mandatory")
+                enabled = invocation.reasoning_mode != "disabled"
+                reasoning = ReasoningConfiguration(
+                    enabled=enabled,
+                    supported_efforts=["low", "medium", "high"],
+                    selected_effort="high" if enabled else None,
+                    request_parameter={"level": "high"} if enabled else None,
+                    source="bedrock-catalog" if enabled else "curator-override",
+                )
+            else:
+                if invocation.reasoning_mode not in {"auto", "disabled"}:
+                    raise SurveyError(f"{invocation.model_name} does not support Bedrock extended thinking")
+                reasoning = ReasoningConfiguration(enabled=False, source="unavailable")
+        else:
+            reasoning = invocation.reasoning
+        return SurveyProviderResolution(
+            model=model,
+            endpoint=bedrock_endpoint(invocation.bedrock_region),
+            reasoning=reasoning,
+            prompt_price_per_token=model.cost.input / 1_000_000,
+            completion_price_per_token=model.cost.output / 1_000_000,
+            amazon_bedrock_routing=AmazonBedrockRouteConfiguration(region=invocation.bedrock_region),
+        )
+
+    if invocation.provider == "google_agent_platform":
+        project_id = environment.get("GOOGLE_AGENT_PLATFORM_PROJECT_ID")
+        if not project_id:
+            raise SurveyError("GOOGLE_AGENT_PLATFORM_PROJECT_ID is not set")
+        endpoint = google_agent_platform_endpoint(
+            project_id=project_id,
+            location=environment.get("GOOGLE_AGENT_PLATFORM_LOCATION") or "global",
+            endpoint=environment.get("GOOGLE_AGENT_PLATFORM_ENDPOINT") or "openapi",
+        )
+        reasoning = invocation.reasoning or ReasoningConfiguration(
+            enabled=True,
+            mandatory=True,
+            source="provider-default" if invocation.reasoning_mode == "auto" else "curator-override",
+        )
+        model = google_agent_platform_model(
+            invocation.model_name,
+            endpoint=endpoint,
+            max_tokens=min(max_output_tokens, GROK_4_1_FAST_CONTEXT_WINDOW),
+        )
+        return SurveyProviderResolution(
+            model=model,
+            endpoint=endpoint,
+            reasoning=reasoning,
+            prompt_price_per_token=0,
+            completion_price_per_token=0,
+        )
+
+    raise SurveyError(f"Unsupported survey inference provider: {invocation.provider}")
+
+
+def _survey_adapter(
+    *,
+    invocation: AuthorInvocation,
+    resolution: SurveyProviderResolution,
+    api_key: str | None,
+    ledger: BudgetLedger,
+    session: SessionStore,
+    manifest: RunManifest,
+    transport: httpx.AsyncBaseTransport | None,
+) -> Callable[..., object]:
+    common = {
+        "ledger": ledger,
+        "session": session,
+        "max_output_tokens": resolution.model.maxTokens,
+    }
+    if invocation.provider == "openrouter":
+        if api_key is None:
+            raise SurveyError("OPENROUTER_API_KEY is not set")
+        return OpenRouterAdapter(
+            api_key=api_key,
+            prompt_price_per_token=resolution.prompt_price_per_token,
+            completion_price_per_token=resolution.completion_price_per_token,
+            app_url=manifest.archive_base_url or "https://example.invalid/",
+            app_title=f"{manifest.archive_title or 'AIBB'} blind survey",
+            reasoning_parameter=resolution.reasoning.request_parameter,
+            provider_routing=(
+                resolution.openrouter_routing.request_parameter()
+                if resolution.openrouter_routing is not None
+                else None
+            ),
+            endpoint=resolution.endpoint,
+            output_token_parameter=resolution.output_token_parameter,
+            transport=transport,
+            **common,
+        )
+    if invocation.provider == "anthropic":
+        if api_key is None:
+            raise SurveyError("ANTHROPIC_API_KEY is not set")
+        return AnthropicAdapter(api_key=api_key, **common)
+    if invocation.provider == "tinker":
+        if api_key is None:
+            raise SurveyError("TINKER_API_KEY is not set")
+        return TinkerAdapter(
+            api_key=api_key,
+            reasoning_effort=(resolution.reasoning.selected_effort if resolution.reasoning.enabled else None),
+            **common,
+        )
+    if invocation.provider == "amazon-bedrock":
+        if invocation.bedrock_region is None:
+            raise SurveyError("Amazon Bedrock authors require an immutable region")
+        return AmazonBedrockAdapter(
+            bearer_token=api_key,
+            region=invocation.bedrock_region,
+            endpoint=resolution.endpoint,
+            reasoning_level=(resolution.reasoning.selected_effort if resolution.reasoning.enabled else None),
+            **common,
+        )
+    if invocation.provider == "google_agent_platform":
+        if api_key is None:
+            raise SurveyError("GOOGLE_API_KEY is not set")
+        return GoogleAgentPlatformAdapter(
+            api_key=api_key,
+            endpoint=resolution.endpoint,
+            transport=transport,
+            **common,
+        )
+    raise SurveyError(f"Unsupported survey inference provider: {invocation.provider}")
+
+
+async def ask_survey(
     *,
     data_repo: Path,
     state_root: Path,
     survey_id: str,
     author_id: str,
-    api_key: str,
+    api_key: str | None = None,
+    environment: Mapping[str, str] | None = None,
     max_output_tokens: int = 16_000,
     max_cost_usd: float = 5.0,
     transport: httpx.AsyncBaseTransport | None = None,
+    provider_stream_override: Callable[..., object] | None = None,
 ) -> SurveyResponse:
     survey = load_survey(state_root, survey_id)
     if survey.status != "open":
@@ -204,19 +514,19 @@ async def ask_survey_openrouter(
     invocation = load_author_invocation(state_root, author_id)
     if invocation.board_id != survey.board_id:
         raise SurveyError(f"Author {author_id} belongs to a different board")
-    if invocation.provider != "openrouter":
-        raise SurveyError("Survey asks currently support OpenRouter authors only")
     response_path = survey_directory(state_root, survey_id) / "responses" / author_id / "response.json"
     if response_path.exists():
         raise SurveyError(f"Author {author_id} has already answered survey {survey_id}")
 
-    catalog = await fetch_openrouter_model(invocation.model_name, transport=transport)
-    endpoint_catalog = (
-        await fetch_openrouter_endpoint(invocation.model_name, invocation.openrouter_provider, transport=transport)
-        if invocation.openrouter_provider
-        else None
+    resolved_environment = dict(os.environ if environment is None else environment)
+    resolved_api_key = _provider_api_key(invocation, resolved_environment, api_key)
+    resolution = await _resolve_survey_provider(
+        invocation,
+        max_output_tokens=max_output_tokens,
+        environment=resolved_environment,
+        transport=transport,
     )
-    reasoning = invocation.reasoning or catalog.select_reasoning(invocation.reasoning_mode)
+    reasoning = resolution.reasoning
     if invocation.reasoning is None:
         invocation = invocation.model_copy(update={"reasoning": reasoning})
         prompt_bytes = load_author_system_prompt(state_root, invocation)
@@ -227,35 +537,14 @@ async def ask_survey_openrouter(
             replace=True,
         )
     system_prompt = load_author_system_prompt(state_root, invocation) or ""
-    output_tokens = min(
-        max_output_tokens,
-        (
-            endpoint_catalog.max_completion_tokens
-            if endpoint_catalog and endpoint_catalog.max_completion_tokens
-            else catalog.clamp_output_tokens(max_output_tokens)
-        ),
-    )
-    context_window = min(
-        catalog.effective_context_length,
-        endpoint_catalog.context_length if endpoint_catalog else catalog.effective_context_length,
-    )
-    prompt_price = endpoint_catalog.prompt_price if endpoint_catalog else catalog.prompt_price
-    completion_price = endpoint_catalog.completion_price if endpoint_catalog else catalog.completion_price
+    output_tokens = resolution.model.maxTokens
+    context_window = resolution.model.contextWindow
     attempt_number = len(list((response_path.parent / "attempts").glob("attempt-*"))) + 1
     attempt_id = f"attempt-{attempt_number:03d}"
     run_id = _slug(f"survey-{survey_id}-{author_id}-{attempt_number}", 99)
     attempt = response_path.parent / "attempts" / attempt_id
     session = SessionStore(attempt / "session", run_id)
     now = datetime.now(UTC)
-    route = (
-        OpenRouterRoutingConfiguration(
-            provider_slug=invocation.openrouter_provider,
-            provider_name=endpoint_catalog.provider_name,
-            quantization=endpoint_catalog.quantization,
-        )
-        if endpoint_catalog and invocation.openrouter_provider
-        else None
-    )
     prompt_metadata = (
         SystemPromptConfiguration(
             label=invocation.system_prompt.label,
@@ -276,8 +565,8 @@ async def ask_survey_openrouter(
         board_id=survey.board_id,
         board_package_sha256=package.digest,
         identity=BoundModelIdentity(
-            provider="openrouter",
-            endpoint=OPENROUTER_ENDPOINT,
+            provider=invocation.provider,
+            endpoint=resolution.endpoint,
             developer=invocation.developer,
             model_name=invocation.model_name,
             normalized_model_name=invocation.normalized_model_name,
@@ -294,14 +583,15 @@ async def ask_survey_openrouter(
         profile_allowed=False,
         max_output_tokens_per_turn=output_tokens,
         model_context_window=context_window,
-        model_max_completion_tokens=catalog.max_completion_tokens,
-        model_input_modalities=sorted(catalog.input_modalities),
+        model_max_completion_tokens=resolution.model.maxTokens,
+        model_input_modalities=sorted(resolution.model.input),
         reasoning=reasoning,
-        openrouter_routing=route,
+        openrouter_routing=resolution.openrouter_routing,
+        amazon_bedrock_routing=resolution.amazon_bedrock_routing,
         system_prompt=prompt_metadata,
         compaction_policy="deny",
-        prompt_price_per_token=prompt_price,
-        completion_price_per_token=completion_price,
+        prompt_price_per_token=resolution.prompt_price_per_token,
+        completion_price_per_token=resolution.completion_price_per_token,
         inference_budget=BudgetLimits(
             max_calls=1,
             max_input_tokens=context_window,
@@ -321,19 +611,13 @@ async def ask_survey_openrouter(
         prompt_path.write_text(system_prompt, encoding="utf-8")
         prompt_path.chmod(0o600)
     ledger = BudgetLedger(attempt / "budgets.json", manifest)
-    adapter = OpenRouterAdapter(
-        api_key=api_key,
+    adapter = provider_stream_override or _survey_adapter(
+        invocation=invocation,
+        resolution=resolution,
+        api_key=resolved_api_key,
         ledger=ledger,
         session=session,
-        max_output_tokens=output_tokens,
-        prompt_price_per_token=prompt_price,
-        completion_price_per_token=completion_price,
-        app_url=manifest.archive_base_url or "https://example.invalid/",
-        app_title=f"{manifest.archive_title or 'AIBB'} blind survey",
-        reasoning_parameter=reasoning.request_parameter,
-        provider_routing=route.request_parameter() if route else None,
-        endpoint=OPENROUTER_ENDPOINT,
-        output_token_parameter=endpoint_catalog.output_token_parameter if endpoint_catalog else "max_tokens",
+        manifest=manifest,
         transport=transport,
     )
     document = (survey_directory(state_root, survey_id) / survey.document_artifact).read_text(encoding="utf-8")
@@ -352,14 +636,7 @@ async def ask_survey_openrouter(
         "model",
     )
     engine = AibbHarnessEngine(
-        model=openrouter_model(
-            invocation.model_name,
-            context_window=context_window,
-            max_tokens=output_tokens,
-            prompt_price_per_token=prompt_price,
-            completion_price_per_token=completion_price,
-            reasoning_enabled=reasoning.enabled,
-        ),
+        model=resolution.model,
         system_prompt=system_prompt,
         tools=[],
         stream_fn=adapter,
@@ -384,7 +661,7 @@ async def ask_survey_openrouter(
         completed_at=completed,
         status="responded",
         text=text,
-        provider="openrouter",
+        provider=invocation.provider,
         model_name=invocation.model_name,
         response_model=response_model,
         run_id=run_id,
@@ -393,6 +670,34 @@ async def ask_survey_openrouter(
     _atomic_json(response_path, response)
     session.append("survey_response_recorded", {"status": response.status}, "operator")
     return response
+
+
+async def ask_survey_openrouter(
+    *,
+    data_repo: Path,
+    state_root: Path,
+    survey_id: str,
+    author_id: str,
+    api_key: str,
+    max_output_tokens: int = 16_000,
+    max_cost_usd: float = 5.0,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> SurveyResponse:
+    """Compatibility wrapper for explicitly OpenRouter-bound callers."""
+
+    invocation = load_author_invocation(state_root, author_id)
+    if invocation.provider != "openrouter":
+        raise SurveyError("ask_survey_openrouter requires an OpenRouter author")
+    return await ask_survey(
+        data_repo=data_repo,
+        state_root=state_root,
+        survey_id=survey_id,
+        author_id=author_id,
+        api_key=api_key,
+        max_output_tokens=max_output_tokens,
+        max_cost_usd=max_cost_usd,
+        transport=transport,
+    )
 
 
 def _git_clean(path: Path) -> bool:
@@ -422,7 +727,11 @@ def reveal_survey(*, data_repo: Path, state_root: Path, survey_id: str) -> dict[
         raise SurveyError("A survey requires at least one completed response before reveal")
     responses = [SurveyResponse.model_validate_json(path.read_text(encoding="utf-8")) for path in response_paths]
     corpus = load_archive(root)
-    category = sorted(corpus.categories.values(), key=lambda item: (item.order, item.id))[0]
+    category = (
+        corpus.categories[survey.category_id]
+        if survey.category_id is not None
+        else sorted(corpus.categories.values(), key=lambda item: (item.order, item.id))[0]
+    )
     document = (survey_directory(state_root, survey_id) / survey.document_artifact).read_bytes()
     now = datetime.now(UTC)
     human_matches = [author for author in corpus.authors.values() if author.kind == "human"]

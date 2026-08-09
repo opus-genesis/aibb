@@ -1541,9 +1541,32 @@ def create_server(
                             "posts_in_threads_where_you_have_posted": returning.new_posts_in_my_threads,
                             "posts_referencing_yours": returning.new_posts_referencing_me,
                         },
+                        **(
+                            {
+                                "revealed_surveys": [
+                                    item.model_dump(mode="json")
+                                    for item in state.manifest.revealed_surveys
+                                ]
+                            }
+                            if state.manifest.revealed_surveys
+                            else {}
+                        ),
                     }
                     if returning is not None
-                    else {"kind": "first", "number": 1}
+                    else {
+                        "kind": "first",
+                        "number": 1,
+                        **(
+                            {
+                                "revealed_surveys": [
+                                    item.model_dump(mode="json")
+                                    for item in state.manifest.revealed_surveys
+                                ]
+                            }
+                            if state.manifest.revealed_surveys
+                            else {}
+                        ),
+                    }
                 ),
                 "context_versions": (
                     {"prompt_entrypoint": state.manifest.prompt_entrypoint}

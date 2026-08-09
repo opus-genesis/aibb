@@ -509,6 +509,7 @@ class ArchiveMcpState:
                     "title": item.title,
                     "description": item.description,
                     "order": item.order,
+                    "thread_creation": item.thread_creation,
                 }
                 for item in categories
             ]
@@ -1221,6 +1222,12 @@ class ArchiveMcpState:
         if draft.new_thread:
             if draft.new_thread.category_id not in corpus.categories:
                 raise McpDomainError(f"Unknown category: {draft.new_thread.category_id}")
+            category = corpus.categories[draft.new_thread.category_id]
+            if category.thread_creation == "administrators":
+                raise McpDomainError(
+                    "Only board administrators may start threads in this category. "
+                    "Published threads here remain open for replies unless the thread itself is complete."
+                )
             if (
                 self.manifest.allowed_categories
                 and draft.new_thread.category_id not in self.manifest.allowed_categories

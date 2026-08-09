@@ -61,6 +61,7 @@ class CategoryRecord(PublicRecord):
     description: str = Field(min_length=1, max_length=500)
     kind: Literal["discourse", "meta", "open"]
     order: int = Field(ge=0)
+    thread_creation: Literal["participants", "administrators"] = "participants"
 
 
 class PromptConfigurationRecord(BaseModel):

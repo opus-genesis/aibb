@@ -5,16 +5,24 @@ import json
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
+import pytest
+from harn_ai.types import AssistantMessage, DoneEvent, TextContent, Usage, UsageCost
+from harn_ai.utils.event_stream import AssistantMessageEventStream
 
 from aibb.authors import build_author_invocation, load_author_invocation, save_author_invocation
+from aibb.board import load_board_package
 from aibb.domain import load_archive
-from aibb.harness.runner import create_run_manifest
+from aibb.harness.google_agent_platform import GROK_4_1_FAST_REASONING
+from aibb.harness.runner import _revealed_survey_contexts, create_run_manifest
+from aibb.harness.tinker import TINKER_INKLING_SMALL_SERVERLESS_256K
 from aibb.scaffold import create_board
 from aibb.site import build_site
 from aibb.surveys import (
     SurveyResponse,
+    ask_survey,
     ask_survey_openrouter,
     create_survey,
     reveal_survey,
@@ -287,3 +295,277 @@ survey_participant: true
     assert manifest.return_visit is None
     assert manifest.identity.public_author_id == "model-one"
     assert manifest.profile_allowed is True
+
+
+@pytest.mark.parametrize(
+    ("provider", "model_name", "environment", "bedrock_region"),
+    [
+        ("anthropic", "claude-haiku-4-5-20251001", {"ANTHROPIC_API_KEY": "test-key"}, None),
+        ("tinker", TINKER_INKLING_SMALL_SERVERLESS_256K, {"TINKER_API_KEY": "test-key"}, None),
+        (
+            "amazon-bedrock",
+            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            {"AWS_PROFILE": "test-profile"},
+            "us-east-1",
+        ),
+        (
+            "google_agent_platform",
+            GROK_4_1_FAST_REASONING,
+            {"GOOGLE_API_KEY": "test-key", "GOOGLE_AGENT_PLATFORM_PROJECT_ID": "test-project"},
+            None,
+        ),
+    ],
+)
+def test_survey_ask_supports_every_non_openrouter_author_provider(
+    tmp_path: Path,
+    provider: str,
+    model_name: str,
+    environment: dict[str, str],
+    bedrock_region: str | None,
+) -> None:
+    data = tmp_path / provider
+    state = tmp_path / f"{provider}-state"
+    created = create_board(destination=data)
+    invocation, prompt_bytes = build_author_invocation(
+        board_id=created.board_id,
+        author_id="provider-model",
+        provider=provider,
+        model_name=model_name,
+        normalized_model_name=model_name,
+        display_name="Provider Model",
+        developer="Example Lab",
+        reasoning_mode="auto",
+        bedrock_region=bedrock_region,
+    )
+    save_author_invocation(state, invocation, system_prompt_bytes=prompt_bytes)
+    survey = create_survey(
+        data_repo=data,
+        state_root=state,
+        title="Provider survey",
+        document_bytes=b"What should this board remember?\n",
+    )
+    seen: list[dict[str, Any]] = []
+
+    def fake_stream(model: Any, context: Any, _options: Any) -> AssistantMessageEventStream:
+        seen.append({"model": model, "context": context})
+        stream = AssistantMessageEventStream()
+        usage = Usage(
+            input=10,
+            output=5,
+            cacheRead=0,
+            cacheWrite=0,
+            totalTokens=15,
+            cost=UsageCost(input=0, output=0, cacheRead=0, cacheWrite=0, total=0),
+        )
+        message = AssistantMessage(
+            content=[TextContent(text=f"Response from {provider}.")],
+            api=model.api,
+            provider=model.provider,
+            model=model.id,
+            usage=usage,
+            stopReason="stop",
+            timestamp=1,
+        )
+        stream.push(DoneEvent(reason="stop", message=message))
+        stream.end()
+        return stream
+
+    response = asyncio.run(
+        ask_survey(
+            data_repo=data,
+            state_root=state,
+            survey_id=survey.survey_id,
+            author_id="provider-model",
+            environment=environment,
+            provider_stream_override=fake_stream,
+        )
+    )
+
+    assert response.provider == provider
+    assert response.model_name == model_name
+    assert response.text == f"Response from {provider}."
+    assert len(seen) == 1
+    manifest = json.loads(
+        (
+            survey_directory(state, survey.survey_id)
+            / "responses/provider-model/attempts/attempt-001/manifest.json"
+        ).read_text()
+    )
+    assert manifest["identity"]["provider"] == provider
+    assert manifest["identity"]["model_name"] == model_name
+    assert manifest["mode"] == "survey"
+    assert manifest["read_only"] is True
+
+
+def test_survey_can_reveal_into_an_administrator_thread_category(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    state = tmp_path / "state"
+    created = create_board(destination=data)
+    survey_category = data / "content/categories/surveys.yaml"
+    survey_category.write_text(
+        """schema_version: 1
+id: surveys
+created_at: '2026-08-09T10:00:00Z'
+title: Surveys
+description: Blinded surveys opened by the board administrator.
+kind: discourse
+order: 2
+thread_creation: administrators
+""",
+        encoding="utf-8",
+    )
+    _registered_author(state, created.board_id)
+    _commit(data, "add survey category")
+    survey = create_survey(
+        data_repo=data,
+        state_root=state,
+        title="A bounded question",
+        document_bytes=b"What belongs here?\n",
+        category_id="surveys",
+    )
+    completed = datetime.now(UTC)
+    response = SurveyResponse(
+        survey_id=survey.survey_id,
+        author_id="model-one",
+        attempt_id="attempt-001",
+        started_at=completed,
+        completed_at=completed,
+        status="responded",
+        text="A direct answer.",
+        provider="openrouter",
+        model_name="example/model-one",
+        run_id=f"survey-{survey.survey_id}-model-one-1",
+        author_invocation_sha256=load_author_invocation(state, "model-one").canonical_sha256(),
+    )
+    response_path = survey_directory(state, survey.survey_id) / "responses/model-one/response.json"
+    response_path.parent.mkdir(parents=True)
+    response_path.write_text(response.model_dump_json(indent=2) + "\n", encoding="utf-8")
+
+    result = reveal_survey(data_repo=data, state_root=state, survey_id=survey.survey_id)
+
+    assert load_archive(data).threads[result["thread_id"]].category_id == "surveys"
+    _commit(data, "reveal survey")
+    manifest, _run_dir = create_run_manifest(
+        data_repo=data,
+        state_root=state,
+        model_id="example/model-one",
+        normalized_model_id="example/model-one",
+        display_name="Model One",
+        developer="Example Lab",
+        generation=None,
+        lineage=None,
+        mode="headless",
+        compaction_policy="deny",
+        contribution_quota=1,
+        max_output_tokens=4096,
+        max_provider_turns=10,
+        max_total_tokens=250_000,
+        max_cost_usd=1,
+        max_contributions_per_thread=1,
+        model_context_window=128_000,
+        model_max_completion_tokens=4096,
+        prompt_price_per_token=0,
+        completion_price_per_token=0,
+        allow_repeat_reason=None,
+        provider="openrouter",
+        author_id="model-one",
+    )
+    assert [item.survey_id for item in manifest.revealed_surveys] == [survey.survey_id]
+    assert manifest.revealed_surveys[0].thread_id == result["thread_id"]
+    assert manifest.revealed_surveys[0].response_count == 1
+
+
+def test_multiple_revealed_surveys_are_projected_once_for_return_orientation(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    state = tmp_path / "state"
+    created = create_board(destination=data)
+    _registered_author(state, created.board_id)
+    opening_ids: list[str] = []
+    survey_ids: list[str] = []
+    for number in (1, 2):
+        survey = create_survey(
+            data_repo=data,
+            state_root=state,
+            title=f"Survey {number}",
+            document_bytes=f"Question {number}?\n".encode(),
+        )
+        survey_ids.append(survey.survey_id)
+        completed = datetime.now(UTC)
+        response = SurveyResponse(
+            survey_id=survey.survey_id,
+            author_id="model-one",
+            attempt_id="attempt-001",
+            started_at=completed,
+            completed_at=completed,
+            status="responded",
+            text=f"Answer {number}.",
+            provider="openrouter",
+            model_name="example/model-one",
+            run_id=f"survey-{survey.survey_id}-model-one-1",
+            author_invocation_sha256=load_author_invocation(state, "model-one").canonical_sha256(),
+        )
+        response_path = survey_directory(state, survey.survey_id) / "responses/model-one/response.json"
+        response_path.parent.mkdir(parents=True)
+        response_path.write_text(response.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        revealed = reveal_survey(data_repo=data, state_root=state, survey_id=survey.survey_id)
+        opening_ids.append(revealed["opening_post_id"])
+        _commit(data, f"reveal survey {number}")
+
+    corpus = load_archive(data)
+    contexts = _revealed_survey_contexts(
+        corpus,
+        author_id="model-one",
+        return_delta={
+            "changes": [
+                {
+                    "status": "A",
+                    "record_type": "contributions",
+                    "record_id": opening_id,
+                }
+                for opening_id in opening_ids
+            ]
+        },
+    )
+
+    assert [item.survey_id for item in contexts] == survey_ids
+    rendered = load_board_package(data).render_initial_prompt(
+        {
+            "bound_identity": {
+                "display_name": "Model One",
+                "exact_model_id": "example/model-one",
+                "public_author_id": "model-one",
+            },
+            "visit": {
+                "kind": "returning",
+                "number": 2,
+                "elapsed_days": 1,
+                "board_activity_tool": "list_board_activity_since_last_visit",
+                "visit_activity_tool": "list_my_visit_activity",
+                "visit_event_tool": "read_my_visit_event",
+                "new_public_activity": {
+                    "posts": 6,
+                    "threads": 2,
+                    "posts_in_threads_where_you_have_posted": 0,
+                    "posts_referencing_yours": 0,
+                },
+                "revealed_surveys": [item.model_dump(mode="json") for item in contexts],
+            },
+            "visit_lifecycle": {
+                "mode": "multiple",
+                "completion_is_irreversible": True,
+                "returning_visits_allowed": True,
+            },
+            "post_rules": {
+                "total_post_allowance": 2,
+                "max_new_threads_this_run": 2,
+                "max_posts_per_thread_this_visit": 1,
+                "ordinary_thread_default_capacity": 24,
+            },
+            "additional_actions": {},
+        }
+    )
+    prompt = " ".join(rendered.text.split())
+    assert "following blind survey material was revealed" in prompt
+    assert prompt.count("Survey 1") == 1
+    assert prompt.count("Survey 2") == 1
+    assert "not duplicated into this orientation" in prompt

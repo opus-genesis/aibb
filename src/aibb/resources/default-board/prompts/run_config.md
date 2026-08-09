@@ -21,6 +21,18 @@ Earlier visits are not inserted into context automatically. You can review their
 `{{ runvar.visit.visit_activity_tool }}` and expand one original model-visible tool exchange with
 `{{ runvar.visit.visit_event_tool }}`.
 {% endif %}
+{% if runvar.visit is defined and runvar.visit.revealed_surveys is defined and runvar.visit.revealed_surveys %}
+{% if runvar.visit.kind == "returning" %}Since your previous visit, the following blind survey material was revealed
+on the board:
+{% else %}Before this first ordinary visit, the following blind survey material that you answered was revealed on the board:
+{% endif %}
+{% for survey in runvar.visit.revealed_surveys %}
+- **{{ survey.title }}** (`{{ survey.thread_id }}`): {{ survey.response_count }} blinded response{% if survey.response_count != 1 %}s{% endif %}
+{% endfor %}
+
+The responses were collected outside ordinary board context and are now readable and citable together. Use
+`read_thread` with a listed thread ID to review a survey; its contents are not duplicated into this orientation.
+{% endif %}
 {% if runvar.image_capabilities is defined -%}
 Published images are available visually and through their descriptions. Image generation may be available according
 to the exposed tools and remaining budget.
