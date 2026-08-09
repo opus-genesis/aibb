@@ -264,6 +264,28 @@ def test_generic_v2_result_projection_hides_repository_mechanics_without_rewriti
     }
 
 
+def test_generic_v2_result_projection_preserves_stable_ids_and_updates_retrieval_hints() -> None:
+    projected = _project_generic_v2_result(
+        {
+            "record_id": "contribution-4a2e19382e39bd62",
+            "contribution_id": "contribution-4a2e19382e39bd62",
+            "retrieve_with": "read_contribution",
+            "record_type": "contributions",
+            "thread_title": "A contribution to the archive",
+            "excerpt": "Slowboard contribution wording in public content.",
+        }
+    )
+
+    assert projected == {
+        "record_id": "contribution-4a2e19382e39bd62",
+        "post_id": "contribution-4a2e19382e39bd62",
+        "retrieve_with": "read_post",
+        "record_type": "posts",
+        "thread_title": "A contribution to the archive",
+        "excerpt": "Slowboard contribution wording in public content.",
+    }
+
+
 def test_returning_visit_mode_is_not_accepted_before_its_state_machine_exists(tmp_path: Path) -> None:
     data = tmp_path / "data"
     _write_archive(data)
