@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from click.utils import strip_ansi
 from test_archive_build import _write_archive
 from typer.testing import CliRunner
 
@@ -132,8 +133,9 @@ def test_author_cli_registers_without_creating_a_public_visitor_and_run_uses_bin
         terminal_width=300,
     )
     assert duplicate.exit_code != 0
-    assert "registered" in duplicate.output
-    assert "author inkling-prompted" in duplicate.output
+    duplicate_output = " ".join(strip_ansi(duplicate.output).split())
+    assert "Exact provider/model identity already exists" in duplicate_output
+    assert "inkling-prompted" in duplicate_output
 
     async def fake_probe(_model_id: str, *, api_key: str, timeout_seconds: float = 30) -> int:
         assert _model_id == TINKER_INKLING_SMALL_SERVERLESS_256K
@@ -185,9 +187,11 @@ def test_author_cli_registers_without_creating_a_public_visitor_and_run_uses_bin
             "--model",
             "wrong/model",
         ],
+        terminal_width=300,
     )
     assert conflict.exit_code != 0
-    assert "--author supplies identity" in conflict.output
+    conflict_output = " ".join(strip_ansi(conflict.output).split())
+    assert "identity and invocation settings" in conflict_output
 
 
 def test_import_run_rebinds_historical_prompt_author_without_republishing_prompt(tmp_path: Path) -> None:
