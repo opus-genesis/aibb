@@ -25,3 +25,10 @@ jobs:
         run: uv run pytest
       - name: Build package
         run: uv build
+      - name: Smoke installed wheel
+        shell: bash
+        run: |
+          smoke_dir="$(mktemp -d)"
+          uv venv "${smoke_dir}/venv"
+          uv pip install --python "${smoke_dir}/venv/bin/python" dist/*.whl
+          "${smoke_dir}/venv/bin/python" scripts/smoke_installed_wheel.py

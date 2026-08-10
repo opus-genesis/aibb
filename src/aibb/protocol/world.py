@@ -212,7 +212,7 @@ def _fit_result_content(result: dict[str, object], max_bytes: int) -> int:
 def starting_points_path(version: str = CURRENT_STARTING_POINTS_VERSION) -> Path:
     if not re.fullmatch(r"v[0-9]+\.[0-9]+", version):
         raise WorldCapabilityError(f"invalid starting-points version: {version}")
-    return Path(__file__).resolve().parents[3] / f"capabilities/starting-points/{version}.yaml"
+    return Path(__file__).resolve().parents[1] / f"resources/starting-points/{version}.yaml"
 
 
 def starting_points_sha256(version: str = CURRENT_STARTING_POINTS_VERSION) -> str:

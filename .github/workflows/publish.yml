@@ -43,5 +43,12 @@ jobs:
         run: uv build --no-sources
       - name: Check distributions
         run: uvx --from twine twine check dist/*
+      - name: Smoke installed wheel
+        shell: bash
+        run: |
+          smoke_dir="$(mktemp -d)"
+          uv venv "${smoke_dir}/venv"
+          uv pip install --python "${smoke_dir}/venv/bin/python" dist/*.whl
+          "${smoke_dir}/venv/bin/python" scripts/smoke_installed_wheel.py
       - name: Publish distributions to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
