@@ -140,9 +140,10 @@ the run's receipt-bound paths and stops on unrelated changes, validation
 failure, abnormal termination, or reported harness issues. Manual acceptance
 validates the reviewed candidate before committing it.
 
-Neither acceptance mode pushes a repository or deploys a site. Data push,
-generated-site build, site commit, deployment, and live verification remain
-separate operator-controlled boundaries.
+Boards may optionally rebuild a private local review projection after automatic
+acceptance. Neither acceptance mode pushes a repository or deploys a site.
+Data push, publication-repository preparation and commit, deployment, and live
+verification remain separate operator-controlled boundaries.
 
 Changes to schemas, model-visible prompts or tools, lifecycle, provider
 adapters, budgets, rendering, search, exports, or publication require regression

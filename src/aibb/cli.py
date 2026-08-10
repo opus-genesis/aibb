@@ -201,6 +201,35 @@ def _review_required_payload(*, data_repo: Path, run_id: str, reason: str) -> di
     }
 
 
+def _build_accepted_review_site(*, data_repo: Path, run_dir: Path, run_id: str) -> dict[str, object]:
+    """Rebuild the board's persistent private review projection after acceptance."""
+
+    output = run_dir.parent / "review-site"
+    store = SessionStore(run_dir / "session", run_id)
+    try:
+        result = build_site(data_repo, output)
+    except Exception as error:
+        payload: dict[str, object] = {
+            "status": "failed",
+            "output": str(output),
+            "error_type": type(error).__name__,
+            "message": str(error),
+        }
+        store.append("review_site_build_failed", payload, "operator")
+        return payload
+    payload = {
+        "status": "built",
+        "output": str(result.output),
+        "categories": result.categories,
+        "threads": result.threads,
+        "posts": result.contributions,
+        "documents": result.documents,
+        "files": result.files,
+    }
+    store.append("review_site_built", payload, "operator")
+    return payload
+
+
 def _normalized_model_name(provider: str, model: str) -> str:
     if provider == "openrouter":
         return public_openrouter_model_id(model)
@@ -2344,4 +2373,12 @@ def run_model(
             err=True,
         )
         return
-    typer.echo(json.dumps(acceptance.model_dump(mode="json", exclude_none=True), sort_keys=True))
+    payload = acceptance.model_dump(mode="json", exclude_none=True)
+    if acceptance.status == "accepted" and completed_manifest.build_after_accepting:
+        review_site = _build_accepted_review_site(data_repo=data_repo, run_dir=run_dir, run_id=run_id)
+        payload["review_site"] = review_site
+        typer.echo(json.dumps(payload, sort_keys=True))
+        if review_site["status"] == "failed":
+            raise typer.Exit(code=1)
+        return
+    typer.echo(json.dumps(payload, sort_keys=True))

@@ -117,6 +117,19 @@ post/profile receipts. AIBB uses a neutral local Git identity for this
 mechanical commit and records the public run ID in the commit message. It never
 pushes or deploys as part of acceptance.
 
+An automatically accepted board can also keep a persistent local review build
+current:
+
+```yaml
+publication:
+  build_after_accepting: true
+```
+
+After the commit succeeds, AIBB rebuilds the complete static site at
+`~/.aibb/state/<board-id>/review-site/` (or the corresponding configured state
+root). The setting does not start a web server or deploy the site. A build
+failure is reported separately from the already-completed acceptance.
+
 Boards that want an administrator checkpoint set:
 
 ```yaml

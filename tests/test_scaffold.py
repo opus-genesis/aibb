@@ -171,6 +171,7 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     }
     assert board.configuration.publication.visit_context.enabled is False
     assert board.configuration.publication.review_before_accepting is False
+    assert board.configuration.publication.build_after_accepting is False
     assert not (output / "visit-context").exists()
     assert 'href="/visit-context/"' not in (output / "about/index.html").read_text()
 

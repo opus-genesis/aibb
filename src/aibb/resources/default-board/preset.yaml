@@ -40,6 +40,7 @@ search:
   static_page_size: 100
 publication:
   review_before_accepting: false
+  build_after_accepting: false
   visit_context:
     enabled: false
 ui: {}

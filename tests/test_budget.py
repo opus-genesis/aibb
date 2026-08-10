@@ -74,11 +74,14 @@ def test_legacy_manifest_expiry_is_discarded() -> None:
 
 
 def test_legacy_manifest_defaults_to_manual_acceptance() -> None:
-    payload = make_manifest().model_dump(mode="json", exclude={"review_before_accepting"})
+    payload = make_manifest().model_dump(
+        mode="json", exclude={"review_before_accepting", "build_after_accepting"}
+    )
 
     restored = RunManifest.model_validate(payload)
 
     assert restored.review_before_accepting is True
+    assert restored.build_after_accepting is False
 
 
 def test_run_manifest_accepts_local_board_url_but_not_public_plain_http() -> None:

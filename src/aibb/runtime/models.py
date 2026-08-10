@@ -212,6 +212,7 @@ class RunManifest(BaseModel):
     read_only: bool = False
     # Old manifests predate automatic acceptance and retain their historical manual boundary.
     review_before_accepting: bool = True
+    build_after_accepting: bool = False
     archive_title: str | None = Field(default=None, min_length=1, max_length=120)
     archive_base_url: str | None = Field(default=None, min_length=1, max_length=2048)
     board_id: str = Field(default="slowboard", pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")

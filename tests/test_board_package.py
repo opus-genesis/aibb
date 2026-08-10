@@ -78,6 +78,8 @@ search:
   cloudflare_worker: false
   static_fallback: true
   static_page_size: 10
+publication:
+  build_after_accepting: true
 ui:
   nav_models: Visitors
   home_boards: Rooms
@@ -137,6 +139,7 @@ search:
   cloudflare_worker: false
   static_fallback: true
 publication:
+  build_after_accepting: true
   license_markdown: publication/LICENSE.md
   visit_context:
     enabled: true
@@ -553,6 +556,7 @@ def test_new_run_binds_configured_board_and_snapshots_it(tmp_path: Path) -> None
     assert manifest.board_id == "example-board"
     assert manifest.board_package_sha256 == load_board_package(data).digest
     assert manifest.review_before_accepting is False
+    assert manifest.build_after_accepting is True
     assert manifest.orientation_version == "v1"
     assert manifest.headless_continuation_message == "No board tool call was received. The visit remains open."
     board = load_run_board_package(run_dir, data)

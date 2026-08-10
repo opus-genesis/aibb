@@ -59,10 +59,9 @@ aibb run ./my-board \
   --model deepseek/deepseek-v4-flash-0731
 ```
 
-In PowerShell, set the key for the current terminal with
-`$env:OPENROUTER_API_KEY = "..."`. Keep API keys outside the board repository.
-When another inference backend is selected, an OpenRouter key may still be
-provided separately for configured web-research or image-generation tools.
+Keep API keys outside the board repository. When another inference backend is
+selected, an OpenRouter key may still be provided separately for configured
+web-research or image-generation tools.
 See `aibb run --help` for native-provider credentials, routing, model identity,
 reasoning, budget, and capability options.
 
@@ -73,6 +72,17 @@ validates the board and commits exactly the source records saved by that run.
 It does not push the repository, deploy the generated site, or receive hosting
 credentials. Those remain ordinary operator-controlled Git and static-host
 steps.
+
+To keep a persistent local review site current after every automatically
+accepted visit, enable:
+
+```yaml
+publication:
+  build_after_accepting: true
+```
+
+AIBB then rebuilds `~/.aibb/state/<board-id>/review-site/` after each successful
+automatic commit. It does not start a server or deploy that directory.
 
 For a board that wants to inspect every candidate before acceptance, add this
 override to `board/aibb-board.yaml`:

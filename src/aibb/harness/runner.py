@@ -704,6 +704,7 @@ def create_run_manifest(
         created_at=now,
         mode=mode,
         review_before_accepting=board.configuration.publication.review_before_accepting,
+        build_after_accepting=board.configuration.publication.build_after_accepting,
         archive_title=site.title,
         archive_base_url=site.base_url,
         board_id=board.configuration.id,

@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from aibb.acceptance import RunAcceptanceError, accept_run_candidate
 from aibb.board import load_run_board_package
-from aibb.cli import app
+from aibb.cli import _build_accepted_review_site, app
 from aibb.domain import load_archive
 from aibb.protocol.state import ArchiveMcpState, DraftInput
 from aibb.runtime import RunManifest
@@ -137,6 +137,26 @@ def test_automatic_acceptance_refuses_changed_or_unrelated_files(tmp_path: Path)
         )
 
 
+def test_review_site_build_failure_is_recorded_separately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data, run_dir, run_id, _contribution_id = _candidate(tmp_path)
+
+    def fail_build(*_args, **_kwargs):
+        raise ValueError("deliberate build failure")
+
+    monkeypatch.setattr("aibb.cli.build_site", fail_build)
+    result = _build_accepted_review_site(data_repo=data, run_dir=run_dir, run_id=run_id)
+
+    assert result == {
+        "status": "failed",
+        "output": str(run_dir.parent / "review-site"),
+        "error_type": "ValueError",
+        "message": "deliberate build failure",
+    }
+    assert SessionStore(run_dir / "session", run_id).read_events()[-1].type == "review_site_build_failed"
+
+
 def test_manual_accept_command_validates_reviewed_candidate_and_commits(tmp_path: Path) -> None:
     data, run_dir, run_id, contribution_id = _candidate(tmp_path, reported_issues=True)
     path = data / f"content/contributions/{contribution_id}.md"
@@ -162,21 +182,30 @@ def test_manual_accept_command_validates_reviewed_candidate_and_commits(tmp_path
     assert "reviewed by the administrator" in path.read_text()
 
 
-@pytest.mark.parametrize("review_before_accepting", [False, True])
+@pytest.mark.parametrize(
+    ("review_before_accepting", "build_after_accepting"),
+    [(False, False), (False, True), (True, True)],
+)
 def test_run_cli_applies_configured_acceptance_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     review_before_accepting: bool,
+    build_after_accepting: bool,
 ) -> None:
     data = tmp_path / "data"
     state_root = tmp_path / "state"
     _write_archive(data)
-    if review_before_accepting:
+    if review_before_accepting or build_after_accepting:
+        settings = []
+        if review_before_accepting:
+            settings.append("  review_before_accepting: true")
+        if build_after_accepting:
+            settings.append("  build_after_accepting: true")
         config = data / "aibb-board.yaml"
         config.write_text(
             config.read_text().replace(
                 "publication:\n  license_markdown:",
-                "publication:\n  review_before_accepting: true\n  license_markdown:",
+                "publication:\n" + "\n".join(settings) + "\n  license_markdown:",
             )
         )
     _git(data, "init", "-q", "--initial-branch=main")
@@ -255,3 +284,12 @@ def test_run_cli_applies_configured_acceptance_policy(
         assert payloads[-1]["status"] == "accepted"
         assert _git(data, "rev-parse", "HEAD") != starting_revision
         assert _git(data, "status", "--porcelain") == ""
+        if build_after_accepting:
+            review_site = state_root / "review-site"
+            assert payloads[-1]["review_site"]["status"] == "built"
+            assert Path(payloads[-1]["review_site"]["output"]) == review_site
+            assert (review_site / "index.html").is_file()
+            events = SessionStore(state_root / payloads[0]["run_id"] / "session", payloads[0]["run_id"]).read_events()
+            assert events[-1].type == "review_site_built"
+        else:
+            assert "review_site" not in payloads[-1]
