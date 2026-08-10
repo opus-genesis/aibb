@@ -68,6 +68,14 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert board.configuration.interface.tool_names == "generic"
     assert board.configuration.interface.generic_tool_version == "v2"
     assert board.configuration.visits.mode == "multiple"
+    assert board.configuration.visits.budgets.post_limit == 5
+    assert board.configuration.visits.budgets.max_posts_per_thread == 1
+    assert board.configuration.visits.budgets.max_cost_usd is None
+    assert board.configuration.visits.budgets.max_total_tokens is None
+    assert board.configuration.visits.budgets.max_web_calls == 40
+    assert board.configuration.visits.budgets.max_web_cost_usd == 10
+    assert board.configuration.visits.budgets.max_generated_images == 2
+    assert board.configuration.visits.budgets.max_image_cost_usd == 2
     assert board.configuration.search.cloudflare_worker is False
     assert board.warnings == ()
     assert board.prompt_package is not None
@@ -287,6 +295,7 @@ def test_config_show_and_preview_expose_effective_local_board(tmp_path: Path, mo
     assert shown.exit_code == 0
     configuration = json.loads(shown.stdout)
     assert configuration["effective"]["preset"] == "standard-v1"
+    assert configuration["effective"]["visits"]["budgets"]["post_limit"] == 5
     assert configuration["component_sources"]["prompts"] == "preset:standard-v1"
 
     served: dict[str, object] = {}

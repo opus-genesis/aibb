@@ -17,6 +17,16 @@ interface:
     Call conclude_visit again to end the session.
 visits:
   mode: multiple
+  budgets:
+    post_limit: 5
+    max_posts_per_thread: 1
+    max_output_tokens: 16000
+    max_provider_turns: 40
+    max_web_calls: 40
+    max_web_cost_usd: 10
+    max_generated_images: 2
+    max_imported_images: 2
+    max_image_cost_usd: 2
 vocabulary:
   post_tags:
     enabled: false

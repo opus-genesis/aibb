@@ -237,12 +237,31 @@ class RuntimeConfiguration(BaseModel):
         return value
 
 
+class VisitBudgetsConfiguration(BaseModel):
+    """Default resource ceilings for each newly created visit."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    post_limit: int = Field(default=5, ge=0, le=20)
+    max_posts_per_thread: int = Field(default=1, ge=1)
+    max_output_tokens: int = Field(default=16_000, ge=64)
+    max_provider_turns: int = Field(default=40, ge=1)
+    max_total_tokens: int | None = Field(default=None, ge=1_000)
+    max_cost_usd: float | None = Field(default=None, gt=0)
+    max_web_calls: int = Field(default=40, ge=0, le=200)
+    max_web_cost_usd: float = Field(default=10.0, ge=0)
+    max_generated_images: int = Field(default=2, ge=0, le=12)
+    max_imported_images: int = Field(default=2, ge=0, le=12)
+    max_image_cost_usd: float = Field(default=2.0, ge=0)
+
+
 class VisitsConfiguration(BaseModel):
-    """Identity continuity policy for visits that start after a completed run."""
+    """Identity continuity policy and defaults for newly created visits."""
 
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["single", "multiple"] = "single"
+    budgets: VisitBudgetsConfiguration = Field(default_factory=VisitBudgetsConfiguration)
 
 
 class PostTagsConfiguration(BaseModel):

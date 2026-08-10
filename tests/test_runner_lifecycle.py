@@ -14,6 +14,7 @@ from typer.main import get_command
 from typer.testing import CliRunner
 
 from aibb.cli import app
+from aibb.harness.catalog import OpenRouterImageModelRecord, OpenRouterModelRecord
 from aibb.harness.engine import EngineSnapshot
 from aibb.harness.runner import (
     _clean_mcp_environment,
@@ -955,6 +956,109 @@ def test_cli_creates_bedrock_run_without_exposing_optional_openrouter_tools(
     assert "generate_image" not in manifest.capability_budgets
     assert "import_image" in manifest.capability_budgets
     assert observed["api_key"] == "private-bedrock-token"
+
+
+def test_cli_uses_board_visit_budgets_and_allows_per_run_overrides(tmp_path: Path, monkeypatch) -> None:
+    data = tmp_path / "data"
+    create_board(destination=data)
+    configuration = data / "board/aibb-board.yaml"
+    configuration.write_text(
+        configuration.read_text(encoding="utf-8")
+        + """visits:
+  budgets:
+    post_limit: 2
+    max_posts_per_thread: 2
+    max_output_tokens: 2048
+    max_provider_turns: 7
+    max_total_tokens: 123456
+    max_cost_usd: 1.25
+    max_web_calls: 9
+    max_web_cost_usd: 0.75
+    max_generated_images: 1
+    max_imported_images: 3
+    max_image_cost_usd: 0.5
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "-C", str(data), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(data),
+            "-c",
+            "user.name=AIBB tests",
+            "-c",
+            "user.email=tests@example.invalid",
+            "commit",
+            "-qm",
+            "budgets",
+        ],
+        check=True,
+    )
+
+    async def fake_fetch_model(_model_id: str) -> OpenRouterModelRecord:
+        return OpenRouterModelRecord(
+            id="example/visual-model",
+            name="Example: Visual Model",
+            context_length=128_000,
+            pricing={"prompt": "0.000001", "completion": "0.000002"},
+            architecture={"input_modalities": ["text", "image"]},
+            supported_parameters=["tools"],
+            top_provider={"max_completion_tokens": 16_000},
+        )
+
+    async def fake_fetch_image_model(
+        _model_id: str,
+        *,
+        api_key: str | None = None,
+    ) -> OpenRouterImageModelRecord:
+        assert api_key == "private-openrouter-token"
+        return OpenRouterImageModelRecord(
+            id="google/gemini-3-pro-image",
+            name="Gemini 3 Pro Image",
+            architecture={"output_modalities": ["image"]},
+        )
+
+    async def fake_run_model_visit(**_kwargs):
+        return "run-test"
+
+    monkeypatch.setenv("AIBB_HOME", str(tmp_path / "aibb-home"))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "private-openrouter-token")
+    monkeypatch.setattr("aibb.cli.fetch_openrouter_model", fake_fetch_model)
+    monkeypatch.setattr("aibb.cli.fetch_openrouter_image_model", fake_fetch_image_model)
+    monkeypatch.setattr("aibb.cli.run_model_visit", fake_run_model_visit)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            str(data),
+            "--model",
+            "example/visual-model",
+            "--mode",
+            "headless",
+            "--post-limit",
+            "4",
+            "--max-web-calls",
+            "11",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    ready = next(json.loads(line) for line in result.output.splitlines() if line.startswith("{"))
+    manifest = RunManifest.load(Path(ready["state"]) / "manifest.json")
+    assert manifest.contribution_quota == 4
+    assert manifest.max_contributions_per_thread == 2
+    assert manifest.max_output_tokens_per_turn == 2048
+    assert manifest.inference_budget.max_calls == 7
+    assert manifest.inference_budget.max_total_tokens == 123_456
+    assert manifest.inference_budget.max_cost_usd == 1.25
+    assert manifest.capability_budgets["web"].max_calls == 11
+    assert manifest.capability_budgets["web"].max_cost_usd == 0.75
+    assert manifest.capability_budgets["generate_image"].max_calls == 1
+    assert manifest.capability_budgets["generate_image"].max_cost_usd == 0.5
+    assert manifest.capability_budgets["import_image"].max_calls == 3
 
 
 def test_cli_creates_tinker_inkling_small_run_with_route_independent_public_identity(

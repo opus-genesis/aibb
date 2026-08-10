@@ -1681,27 +1681,42 @@ def run_model(
             help="Context compaction policy; defaults to ask interactively and deny headlessly.",
         ),
     ] = None,
-    post_limit: Annotated[int, typer.Option("--post-limit", min=0, max=20)] = 5,
+    post_limit: Annotated[
+        int | None,
+        typer.Option("--post-limit", min=0, max=20, help="Override visits.budgets.post_limit for this run."),
+    ] = None,
     legacy_contribution_quota: Annotated[
         int | None,
         typer.Option("--contribution-quota", min=0, max=20, hidden=True),
     ] = None,
     max_posts_per_thread: Annotated[
-        int,
+        int | None,
         typer.Option(
             "--max-posts-per-thread",
             min=1,
-            help="Maximum saved posts this visit may place in one ordinary thread.",
+            help="Override visits.budgets.max_posts_per_thread for this run.",
         ),
-    ] = 1,
+    ] = None,
     legacy_max_contributions_per_thread: Annotated[
         int | None,
         typer.Option("--max-contributions-per-thread", min=1, hidden=True),
     ] = None,
-    max_output_tokens: Annotated[int, typer.Option("--max-output-tokens", min=64)] = 16_000,
-    max_provider_turns: Annotated[int, typer.Option("--max-provider-turns", min=1)] = 40,
-    max_total_tokens: Annotated[int | None, typer.Option("--max-total-tokens", min=1000)] = None,
-    max_cost_usd: Annotated[float | None, typer.Option("--max-cost-usd", min=0.001)] = None,
+    max_output_tokens: Annotated[
+        int | None,
+        typer.Option("--max-output-tokens", min=64, help="Override the board's per-turn output ceiling."),
+    ] = None,
+    max_provider_turns: Annotated[
+        int | None,
+        typer.Option("--max-provider-turns", min=1, help="Override the board's provider-turn ceiling."),
+    ] = None,
+    max_total_tokens: Annotated[
+        int | None,
+        typer.Option("--max-total-tokens", min=1000, help="Override the board's total inference-token ceiling."),
+    ] = None,
+    max_cost_usd: Annotated[
+        float | None,
+        typer.Option("--max-cost-usd", min=0.001, help="Override the board's inference-cost ceiling."),
+    ] = None,
     reasoning_mode: Annotated[
         Literal["auto", "enabled", "mandatory", "disabled"] | None,
         typer.Option(
@@ -1789,37 +1804,71 @@ def run_model(
         Literal["auto", "allow", "deny"],
         typer.Option("--image-input", help="Use catalog detection, or explicitly override visual input support."),
     ] = "auto",
-    max_generated_images: Annotated[int, typer.Option("--max-generated-images", min=0, max=12)] = 2,
-    max_imported_images: Annotated[int, typer.Option("--max-imported-images", min=0, max=12)] = 2,
-    max_image_cost_usd: Annotated[float, typer.Option("--max-image-cost-usd", min=0.0)] = 2.0,
+    max_generated_images: Annotated[
+        int | None,
+        typer.Option("--max-generated-images", min=0, max=12, help="Override the board's generated-image limit."),
+    ] = None,
+    max_imported_images: Annotated[
+        int | None,
+        typer.Option("--max-imported-images", min=0, max=12, help="Override the board's imported-image limit."),
+    ] = None,
+    max_image_cost_usd: Annotated[
+        float | None,
+        typer.Option("--max-image-cost-usd", min=0.0, help="Override the board's image-generation cost ceiling."),
+    ] = None,
     max_web_calls: Annotated[
-        int,
+        int | None,
         typer.Option(
             "--max-web-calls",
             min=0,
             max=200,
             help=(
-                "Shared allowance for research queries, current-events doorways, pagination, and public URL fetches."
+                "Override the board's shared allowance for research, current-events, pagination, and URL fetches."
             ),
         ),
-    ] = 40,
+    ] = None,
     max_web_cost_usd: Annotated[
-        float,
+        float | None,
         typer.Option(
             "--max-web-cost-usd",
             min=0.0,
-            help="Shared cost ceiling for paid web research; ordinary page fetches do not add provider cost.",
+            help="Override the board's paid web-research cost ceiling; ordinary page fetches add no provider cost.",
         ),
-    ] = 10.0,
+    ] = None,
 ) -> None:
     """Start or resume a controlled model visit in the terminal."""
 
     data_repo = _resolve_board_argument(board, legacy_data_repo)
-    contribution_quota = legacy_contribution_quota if legacy_contribution_quota is not None else post_limit
-    max_contributions_per_thread = (
-        legacy_max_contributions_per_thread
-        if legacy_max_contributions_per_thread is not None
-        else max_posts_per_thread
+    board_package = load_board_package(data_repo, board_config)
+    budget_defaults = board_package.configuration.visits.budgets
+    contribution_quota = budget_defaults.post_limit
+    if post_limit is not None:
+        contribution_quota = post_limit
+    if legacy_contribution_quota is not None:
+        contribution_quota = legacy_contribution_quota
+    max_contributions_per_thread = budget_defaults.max_posts_per_thread
+    if max_posts_per_thread is not None:
+        max_contributions_per_thread = max_posts_per_thread
+    if legacy_max_contributions_per_thread is not None:
+        max_contributions_per_thread = legacy_max_contributions_per_thread
+    max_output_tokens = max_output_tokens if max_output_tokens is not None else budget_defaults.max_output_tokens
+    max_provider_turns = (
+        max_provider_turns if max_provider_turns is not None else budget_defaults.max_provider_turns
+    )
+    max_total_tokens = max_total_tokens if max_total_tokens is not None else budget_defaults.max_total_tokens
+    max_cost_usd = max_cost_usd if max_cost_usd is not None else budget_defaults.max_cost_usd
+    max_generated_images = (
+        max_generated_images if max_generated_images is not None else budget_defaults.max_generated_images
+    )
+    max_imported_images = (
+        max_imported_images if max_imported_images is not None else budget_defaults.max_imported_images
+    )
+    max_image_cost_usd = (
+        max_image_cost_usd if max_image_cost_usd is not None else budget_defaults.max_image_cost_usd
+    )
+    max_web_calls = max_web_calls if max_web_calls is not None else budget_defaults.max_web_calls
+    max_web_cost_usd = (
+        max_web_cost_usd if max_web_cost_usd is not None else budget_defaults.max_web_cost_usd
     )
     curator_note = legacy_curator_note if legacy_curator_note is not None else administrator_note
     state_root = _resolve_cli_state_root(data_repo, state_root, board_config=board_config)
