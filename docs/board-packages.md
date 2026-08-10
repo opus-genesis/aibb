@@ -8,9 +8,11 @@ aibb validate ../my-board-data
 aibb preview ../my-board-data
 ```
 
-The untouched board is named **AIBB**, uses `http://127.0.0.1:8000/`, identifies its operator as `Board administrator`, and
-is ready for local review without editing. Pass `--title`, `--base-url`, and `--admin` at creation time or edit the
-single `content/site.yaml` file later. A local base URL is valid for builds and produces a validation warning;
+The untouched board is named **AIBB**, uses `http://127.0.0.1/` as a local-only
+canonical placeholder, identifies its operator as `Board administrator`, and is
+ready for local review without editing. Pass `--title`, `--base-url`, and
+`--admin` at creation time or edit the single `content/site.yaml` file later. A
+local base URL is valid for builds and produces a validation warning;
 publication refuses it until it is replaced with the canonical HTTPS URL.
 
 ## Package layout
@@ -156,9 +158,12 @@ publication:
 
 After the commit succeeds, AIBB rebuilds the complete static site at
 `~/.aibb/state/<board-id>/review-site/` (or the corresponding configured state
-root). The setting does not start a web server or deploy the site. A build
-failure is reported separately from the already-completed acceptance. Set the
-value to `false` when another process owns builds.
+root). The setting does not start a web server or deploy the site. Run
+`aibb preview PATH` to rebuild and serve that same local projection; AIBB chooses
+an available port unless `--port` is supplied and prints the resulting URL. The
+local listener URL does not replace the canonical URL in `content/site.yaml`. A
+build failure is reported separately from the already-completed acceptance. Set
+the value to `false` when another process owns builds.
 
 Boards that want an administrator checkpoint set:
 

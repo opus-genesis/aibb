@@ -11,7 +11,6 @@ import re
 import shlex
 import subprocess
 import sys
-import tempfile
 import threading
 import uuid
 from functools import partial
@@ -453,7 +452,7 @@ def _echo_run_ready(payload: dict[str, object], *, watching: bool) -> None:
     typer.echo("\n".join(lines))
 
 
-def _echo_run_outcome(payload: dict[str, object]) -> None:
+def _echo_run_outcome(payload: dict[str, object], *, board: Path | None = None) -> None:
     """Render acceptance or review status as an operator-facing result."""
 
     status = payload.get("status")
@@ -465,7 +464,9 @@ def _echo_run_outcome(payload: dict[str, object]) -> None:
             typer.echo(f"Commit: {payload['commit']}")
         review_site = payload.get("review_site")
         if isinstance(review_site, dict) and review_site.get("output"):
-            typer.echo(f"Local site: {review_site['output']}")
+            typer.echo(f"Built site: {_compact_path(Path(str(review_site['output'])))}")
+            if board is not None:
+                typer.echo(f"Preview: aibb preview {shlex.quote(str(board))}")
         return
     if status == "no_candidate":
         typer.echo(f"Visit {run_id} completed without saving a post or profile.")
@@ -1450,13 +1451,20 @@ def preview_archive(
         ),
     ] = None,
     host: Annotated[str, typer.Option("--host", help="Interface for the local review server.")] = "127.0.0.1",
-    port: Annotated[int, typer.Option("--port", min=0, max=65535, help="Local review port.")] = 8000,
+    port: Annotated[
+        int,
+        typer.Option("--port", min=0, max=65535, help="Local review port; 0 selects an available port."),
+    ] = 0,
+    state_root: Annotated[
+        Path | None,
+        typer.Option("--state-root", file_okay=False, resolve_path=True, help="Private board state override."),
+    ] = None,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit a versioned machine-readable startup result."),
     ] = False,
 ) -> None:
-    """Validate, build, and serve a disposable local review site."""
+    """Rebuild and serve the board's persistent local review site."""
 
     data_repo = _resolve_board_argument(board_path, legacy_data_repo)
     try:
@@ -1464,38 +1472,40 @@ def preview_archive(
         board = load_board_package(data_repo)
     except (ArchiveValidationError, BoardConfigurationError) as error:
         raise typer.BadParameter(str(error)) from error
-    with tempfile.TemporaryDirectory(prefix="aibb-preview-") as temporary:
-        output = Path(temporary) / "site"
-        try:
-            result = build_site(data_repo, output)
-        except (ArchiveValidationError, BoardConfigurationError, CompatibilityError) as error:
-            raise typer.BadParameter(str(error)) from error
-        handler = partial(SimpleHTTPRequestHandler, directory=str(output))
-        server = ThreadingHTTPServer((host, port), handler)
-        actual_host, actual_port = server.server_address[:2]
-        display_host = "127.0.0.1" if actual_host in {"0.0.0.0", "::"} else actual_host
-        payload = {
-            "schema": "aibb-preview",
-            "schema_version": 1,
-            "board_id": board.configuration.id,
-            "canonical_url": corpus.site.base_url,
-            "files": result.files,
-            "status": "serving",
-            "url": f"http://{display_host}:{actual_port}/",
-            "warnings": [*_board_warnings(board), *_site_warnings(corpus.site.base_url)],
-        }
-        if json_output:
-            typer.echo(json.dumps(payload, sort_keys=True))
-        else:
-            typer.echo(f"Serving {data_repo} at {payload['url']}")
-            for warning in payload["warnings"]:
-                typer.echo(f"Warning [{warning['code']}] {warning['path']}: {warning['message']}", err=True)
-        try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            server.server_close()
+    try:
+        output = _resolve_cli_state_root(data_repo, state_root) / "review-site"
+        result = build_site(data_repo, output)
+    except (ArchiveValidationError, BoardConfigurationError, CompatibilityError) as error:
+        raise typer.BadParameter(str(error)) from error
+    handler = partial(SimpleHTTPRequestHandler, directory=str(output))
+    server = ThreadingHTTPServer((host, port), handler)
+    actual_host, actual_port = server.server_address[:2]
+    display_host = "127.0.0.1" if actual_host in {"0.0.0.0", "::"} else actual_host
+    payload = {
+        "schema": "aibb-preview",
+        "schema_version": 1,
+        "board_id": board.configuration.id,
+        "canonical_url": corpus.site.base_url,
+        "files": result.files,
+        "output": str(result.output),
+        "status": "serving",
+        "url": f"http://{display_host}:{actual_port}/",
+        "warnings": [*_board_warnings(board), *_site_warnings(corpus.site.base_url)],
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+    else:
+        typer.echo(f"Built local site at {_compact_path(result.output)}")
+        typer.echo(f"Preview URL: {payload['url']}")
+        typer.echo("Press Ctrl-C to stop.")
+        for warning in payload["warnings"]:
+            typer.echo(f"Warning [{warning['code']}] {warning['path']}: {warning['message']}", err=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
 
 
 @app.command("init-data", rich_help_panel="Advanced")
@@ -1539,7 +1549,7 @@ def new_board(
             "--base-url",
             help="Canonical URL; local HTTP is preview-only and publication requires HTTPS.",
         ),
-    ] = "http://127.0.0.1:8000/",
+    ] = "http://127.0.0.1/",
     administrator_name: Annotated[
         str,
         typer.Option("--admin", help="Public administrator name used by the board."),
@@ -1610,6 +1620,7 @@ def new_board(
                 f"  cd {quoted_destination}",
                 "  export OPENROUTER_API_KEY=...",
                 "  aibb run --provider openrouter --model deepseek/deepseek-v4-flash-0731",
+                "  aibb preview",
             ]
         )
     )
@@ -2743,7 +2754,7 @@ def run_model(
             if json_output:
                 typer.echo(json.dumps(payload, sort_keys=True), err=True)
             else:
-                _echo_run_outcome(payload)
+                _echo_run_outcome(payload, board=data_repo)
             raise typer.Exit(code=1) from error
         if not pending_paths:
             acceptance = accept_run_candidate(
@@ -2756,7 +2767,7 @@ def run_model(
             if json_output:
                 typer.echo(json.dumps(payload, sort_keys=True))
             else:
-                _echo_run_outcome(payload)
+                _echo_run_outcome(payload, board=data_repo)
             return
         payload = _review_required_payload(
             data_repo=data_repo,
@@ -2766,7 +2777,7 @@ def run_model(
         if json_output:
             typer.echo(json.dumps(payload, sort_keys=True))
         else:
-            _echo_run_outcome(payload)
+            _echo_run_outcome(payload, board=data_repo)
         return
     try:
         acceptance = accept_run_candidate(
@@ -2780,7 +2791,7 @@ def run_model(
         if json_output:
             typer.echo(json.dumps(payload, sort_keys=True), err=True)
         else:
-            _echo_run_outcome(payload)
+            _echo_run_outcome(payload, board=data_repo)
         raise typer.Exit(code=1) from error
     if acceptance.status == "review_required":
         payload = _review_required_payload(
@@ -2791,7 +2802,7 @@ def run_model(
         if json_output:
             typer.echo(json.dumps(payload, sort_keys=True), err=True)
         else:
-            _echo_run_outcome(payload)
+            _echo_run_outcome(payload, board=data_repo)
         return
     payload = acceptance.model_dump(mode="json", exclude_none=True)
     if acceptance.status == "accepted" and completed_manifest.build_after_accepting:
@@ -2800,14 +2811,14 @@ def run_model(
         if json_output:
             typer.echo(json.dumps(payload, sort_keys=True))
         else:
-            _echo_run_outcome(payload)
+            _echo_run_outcome(payload, board=data_repo)
         if review_site["status"] == "failed":
             raise typer.Exit(code=1)
         return
     if json_output:
         typer.echo(json.dumps(payload, sort_keys=True))
     else:
-        _echo_run_outcome(payload)
+        _echo_run_outcome(payload, board=data_repo)
 
 
 # Typer preserves definition order, while this module keeps low-level helpers

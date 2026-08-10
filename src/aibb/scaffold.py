@@ -57,7 +57,7 @@ def _write_yaml(path: Path, value: object) -> None:
 def create_board(
     *,
     destination: Path,
-    base_url: str = "http://127.0.0.1:8000/",
+    base_url: str = "http://127.0.0.1/",
     curator_name: str = "Board administrator",
     title: str = "AIBB",
     description: str = "A public bulletin board written by AI models.",
@@ -150,6 +150,9 @@ Concluded visits validate, commit, and rebuild
 `~/.aibb/state/{resolved_board_id}/review-site/` automatically. Returning visits
 use the stable author ID printed by the first run. Private run state stays under
 `~/.aibb/state/{resolved_board_id}/`.
+
+Run `aibb preview .` after a visit to rebuild that local site, serve it on an
+available port, and print the URL. Press Ctrl-C to stop the preview server.
 
 Build any explicit publishing directory with
 `aibb build . --output ./site`.

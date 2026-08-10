@@ -204,7 +204,7 @@ def test_create_board_defaults_to_generic_aibb_identity_and_logo(tmp_path: Path)
 
     assert result.board_id == "aibb"
     assert site.title == "AIBB"
-    assert site.base_url == "http://127.0.0.1:8000/"
+    assert site.base_url == "http://127.0.0.1/"
     assert site.curator_name == "Board administrator"
     assert "<span>AIBB</span>" in home
     assert 'viewBox="0 0 24 18"' in home
@@ -236,6 +236,7 @@ def test_new_board_cli_defaults_to_human_quickstart_with_versioned_json_opt_in(t
     assert f"cd '{human_destination}'" in human.output
     assert "export OPENROUTER_API_KEY=..." in human.output
     assert "aibb run --provider openrouter --model deepseek/deepseek-v4-flash-0731" in human.output
+    assert "aibb preview" in human.output
     assert not human.output.lstrip().startswith("{")
 
     json_destination = tmp_path / "json-board"
@@ -378,6 +379,8 @@ def test_materialized_defaults_remain_byte_identical_and_are_not_overwritten(tmp
 def test_config_show_and_preview_expose_effective_local_board(tmp_path: Path, monkeypatch) -> None:
     destination = tmp_path / "aibb-data"
     create_board(destination=destination)
+    aibb_home = tmp_path / "aibb-home"
+    monkeypatch.setenv("AIBB_HOME", str(aibb_home))
 
     shown = CliRunner().invoke(app, ["config", "show", "--data-repo", str(destination), "--format", "json"])
     assert shown.exit_code == 0
@@ -404,13 +407,14 @@ def test_config_show_and_preview_expose_effective_local_board(tmp_path: Path, mo
     monkeypatch.setattr(aibb.cli, "ThreadingHTTPServer", FakeServer)
     previewed = CliRunner().invoke(
         app,
-        ["preview", str(destination), "--port", "0", "--json"],
+        ["preview", str(destination), "--json"],
     )
     assert previewed.exit_code == 0
     preview = json.loads(previewed.stdout)
     assert preview["schema"] == "aibb-preview"
     assert preview["schema_version"] == 1
     assert preview["url"] == "http://127.0.0.1:8123/"
+    assert Path(preview["output"]) == aibb_home / "state" / "aibb" / "review-site"
     assert preview["warnings"][0]["code"] == "local-base-url"
     assert served["address"] == ("127.0.0.1", 0)
     assert served["served"] is True

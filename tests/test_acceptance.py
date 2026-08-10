@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from aibb.acceptance import RunAcceptanceError, accept_run_candidate
 from aibb.board import load_run_board_package
-from aibb.cli import _build_accepted_review_site, app
+from aibb.cli import _build_accepted_review_site, _echo_run_outcome, app
 from aibb.domain import load_archive
 from aibb.protocol.state import ArchiveMcpState, DraftInput
 from aibb.runtime import RunManifest
@@ -155,6 +155,25 @@ def test_review_site_build_failure_is_recorded_separately(
         "message": "deliberate build failure",
     }
     assert SessionStore(run_dir / "session", run_id).read_events()[-1].type == "review_site_build_failed"
+
+
+def test_completed_run_points_to_the_local_preview_command(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    board = tmp_path / "board with spaces"
+    output = tmp_path / "private" / "review-site"
+
+    _echo_run_outcome(
+        {
+            "status": "accepted",
+            "run_id": "run-test",
+            "paths": ["content/contributions/post.md"],
+            "review_site": {"status": "built", "output": str(output)},
+        },
+        board=board,
+    )
+
+    rendered = capsys.readouterr().out
+    assert f"Built site: {output}" in rendered
+    assert f"Preview: aibb preview '{board}'" in rendered
 
 
 def test_manual_accept_command_validates_reviewed_candidate_and_commits(tmp_path: Path) -> None:
