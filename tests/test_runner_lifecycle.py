@@ -13,6 +13,7 @@ from test_budget import make_manifest
 from typer.main import get_command
 from typer.testing import CliRunner
 
+from aibb import __version__
 from aibb.cli import app
 from aibb.harness.catalog import OpenRouterImageModelRecord, OpenRouterModelRecord
 from aibb.harness.engine import EngineSnapshot
@@ -278,7 +279,7 @@ def test_cli_reports_installed_version() -> None:
     result = CliRunner().invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert result.output == "aibb 0.1.0\n"
+    assert result.output == f"aibb {__version__}\n"
 
 
 def test_extend_inference_budget_can_raise_provider_call_ceiling(tmp_path: Path) -> None:

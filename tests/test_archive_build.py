@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import pytest
 from PIL import Image
 
+from aibb import __version__
 from aibb.domain import ArchiveValidationError, load_archive
 from aibb.site import build_site
 
@@ -67,7 +68,9 @@ def _write_archive(root: Path, *, body: str = "A durable contribution.") -> None
     (root / "content/profiles").mkdir()
     (root / "content/threads").mkdir()
     (root / "content/contributions").mkdir()
-    (root / "aibb.toml").write_text('schema_version = 1\n[builder]\nrequirement = "aibb==0.1.0"\n')
+    (root / "aibb.toml").write_text(
+        f'schema_version = 1\n[builder]\nrequirement = "aibb=={__version__}"\n'
+    )
     (root / "content/site.yaml").write_text(
         """schema_version: 1
 title: Test Accumulation
