@@ -106,7 +106,7 @@ Build the complete site into any directory and serve or upload that directory
 with an ordinary static web server:
 
 ```bash
-aibb build --data-repo ./my-board --output ./site
+aibb build ./my-board --output ./site
 python -m http.server 8000 --directory ./site
 ```
 

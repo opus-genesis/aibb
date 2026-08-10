@@ -169,6 +169,7 @@ def test_generic_cli_help_uses_board_vocabulary_and_keeps_legacy_flags_hidden() 
     root_help = runner.invoke(app, ["--help"], terminal_width=160)
     run_help = runner.invoke(app, ["run", "--help"], terminal_width=160)
     new_board_help = runner.invoke(app, ["new-board", "--help"], terminal_width=160)
+    empty_run = runner.invoke(app, ["run"], terminal_width=160)
     root_command = get_command(app)
     run_command = root_command.commands["run"]
     new_board_command = root_command.commands["new-board"]
@@ -185,6 +186,10 @@ def test_generic_cli_help_uses_board_vocabulary_and_keeps_legacy_flags_hidden() 
     )
 
     assert root_help.exit_code == run_help.exit_code == new_board_help.exit_code == 0
+    assert empty_run.exit_code != 0
+    assert "Usage: root run" in empty_run.output
+    assert "--provider" in empty_run.output
+    assert "Traceback" not in empty_run.output
     assert "admin" in root_help.output
     assert "curator" not in root_help.output.casefold()
     assert "materialize" not in root_help.output.casefold()
@@ -194,7 +199,19 @@ def test_generic_cli_help_uses_board_vocabulary_and_keeps_legacy_flags_hidden() 
     assert "contribution" not in run_copy.casefold()
     assert "curator" not in run_copy.casefold()
     assert "--admin" in new_board_options
+    assert "--json" in new_board_options
     assert "curator" not in new_board_copy.casefold()
+
+
+def test_run_reports_a_missing_board_as_operator_input_without_a_traceback(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        ["run", str(tmp_path), "--provider", "openrouter", "--model", "example/model"],
+    )
+
+    assert result.exit_code != 0
+    assert "Missing board configuration" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_bedrock_probe_cli_requires_explicit_credentials(monkeypatch) -> None:
@@ -1059,6 +1076,52 @@ def test_cli_uses_board_visit_budgets_and_allows_per_run_overrides(tmp_path: Pat
     assert manifest.capability_budgets["generate_image"].max_calls == 1
     assert manifest.capability_budgets["generate_image"].max_cost_usd == 0.5
     assert manifest.capability_budgets["import_image"].max_calls == 3
+
+
+def test_failed_run_creation_does_not_leave_an_orphan_author_registration(tmp_path: Path, monkeypatch) -> None:
+    data = tmp_path / "board"
+    aibb_home = tmp_path / "aibb-home"
+    create_board(destination=data)
+
+    async def fake_fetch_model(_model_id: str) -> OpenRouterModelRecord:
+        return OpenRouterModelRecord(
+            id="example/model",
+            name="Example: Model",
+            context_length=128_000,
+            pricing={"prompt": "0.000001", "completion": "0.000002"},
+            architecture={"input_modalities": ["text"]},
+            supported_parameters=["tools"],
+            top_provider={"max_completion_tokens": 16_000},
+        )
+
+    def fail_run_creation(**_kwargs):
+        raise ValueError("synthetic manifest failure")
+
+    monkeypatch.setenv("AIBB_HOME", str(aibb_home))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "private-openrouter-token")
+    monkeypatch.setattr("aibb.cli.fetch_openrouter_model", fake_fetch_model)
+    monkeypatch.setattr("aibb.cli.create_run_manifest", fail_run_creation)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            str(data),
+            "--model",
+            "example/model",
+            "--mode",
+            "headless",
+            "--images",
+            "disable",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "synthetic manifest failure" in result.output
+    assert "Traceback" not in result.output
+    state_root = aibb_home / "state/board"
+    assert (state_root / "board-binding.json").exists()
+    assert not (state_root / "authors").exists()
 
 
 def test_cli_creates_tinker_inkling_small_run_with_route_independent_public_identity(

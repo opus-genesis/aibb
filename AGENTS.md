@@ -40,8 +40,8 @@ git diff --check
 For a board-facing change, also create or use a temporary board and run:
 
 ```bash
-.venv/bin/aibb validate --data-repo PATH
-.venv/bin/aibb build --data-repo PATH --output OUTPUT
+.venv/bin/aibb validate PATH
+.venv/bin/aibb build PATH --output OUTPUT
 ```
 
 ## Harness and protocol changes

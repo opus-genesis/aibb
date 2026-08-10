@@ -223,6 +223,92 @@ def test_generic_board_uses_destination_as_its_private_state_namespace(tmp_path:
     assert load_board_package(destination).configuration.id == "research-room"
 
 
+def test_new_board_cli_defaults_to_human_quickstart_with_versioned_json_opt_in(tmp_path: Path) -> None:
+    human_destination = tmp_path / "board with spaces"
+    human = CliRunner().invoke(app, ["new-board", str(human_destination)])
+
+    assert human.exit_code == 0, human.output
+    assert human.output.startswith(f"Created board at {human_destination}")
+    assert f"Board settings: {human_destination / 'board/aibb-board.yaml'}" in human.output
+    assert f"Site identity:  {human_destination / 'content/site.yaml'}" in human.output
+    assert f"cd '{human_destination}'" in human.output
+    assert "export OPENROUTER_API_KEY=..." in human.output
+    assert "aibb run --provider openrouter --model deepseek/deepseek-v4-flash-0731" in human.output
+    assert not human.output.lstrip().startswith("{")
+
+    json_destination = tmp_path / "json-board"
+    machine = CliRunner().invoke(app, ["new-board", str(json_destination), "--json"])
+
+    assert machine.exit_code == 0, machine.output
+    payload = json.loads(machine.output)
+    assert payload["schema"] == "aibb-new-board"
+    assert payload["schema_version"] == 1
+    assert payload["status"] == "initialized"
+    assert payload["board_id"] == "json-board"
+    assert payload["destination"] == str(json_destination)
+    assert payload["initial_revision"] == _git(json_destination, "rev-parse", "HEAD")
+
+
+def test_common_board_commands_use_positional_paths_and_human_output_by_default(tmp_path: Path) -> None:
+    destination = tmp_path / "board"
+    create_board(destination=destination)
+
+    validated = CliRunner().invoke(app, ["validate", str(destination)])
+    assert validated.exit_code == 0, validated.output
+    assert validated.output.startswith(f"Valid board at {destination}: 1 category, 0 threads, 0 posts, 1 author.")
+
+    validated_json = CliRunner().invoke(app, ["validate", str(destination), "--json"])
+    assert validated_json.exit_code == 0, validated_json.output
+    validation_payload = json.loads(validated_json.stdout)
+    assert validation_payload["schema"] == "aibb-validate"
+    assert validation_payload["schema_version"] == 1
+
+    output = tmp_path / "site"
+    built = CliRunner().invoke(app, ["build", str(destination), "--output", str(output)])
+    assert built.exit_code == 0, built.output
+    assert built.output.startswith("Built ")
+    assert f"files at {output}" in built.output
+    assert (output / "index.html").exists()
+
+
+def test_private_state_binding_follows_a_moved_checkout_and_separates_a_second_clone(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    original = tmp_path / "original"
+    moved = tmp_path / "moved"
+    copied = tmp_path / "copied"
+    aibb_home = tmp_path / "aibb-home"
+    create_board(destination=original)
+    monkeypatch.setenv("AIBB_HOME", str(aibb_home))
+
+    first = CliRunner().invoke(app, ["author", "list", str(original)])
+    assert first.exit_code == 0, first.output
+    binding = aibb_home / "state/original/board-binding.json"
+    first_binding = json.loads(binding.read_text())
+    assert first_binding["data_repo"] == str(original)
+
+    original.rename(moved)
+    after_move = CliRunner().invoke(app, ["author", "list", str(moved)])
+    assert after_move.exit_code == 0, after_move.output
+    assert json.loads(binding.read_text())["data_repo"] == str(moved)
+
+    subprocess.run(["git", "clone", "-q", "--local", str(moved), str(copied)], check=True)
+    duplicate = CliRunner().invoke(app, ["author", "list", str(copied)])
+    assert duplicate.exit_code == 0, duplicate.output
+    copied_checkout_id = _git(copied, "config", "--local", "--get", "aibb.checkout-id")
+    copied_binding = aibb_home / f"state/original-{copied_checkout_id[:8]}/board-binding.json"
+    assert json.loads(copied_binding.read_text())["data_repo"] == str(copied)
+
+    forced_collision = CliRunner().invoke(
+        app,
+        ["author", "list", str(copied), "--state-root", str(binding.parent)],
+    )
+    assert forced_collision.exit_code != 0
+    assert "already bound to another board checkout" in forced_collision.output
+    assert "Traceback" not in forced_collision.output
+
+
 def test_new_board_is_ready_for_an_administrator_thread(tmp_path: Path) -> None:
     destination = tmp_path / "discussion-data"
     create_board(destination=destination, curator_name="Example Administrator")
@@ -314,9 +400,14 @@ def test_config_show_and_preview_expose_effective_local_board(tmp_path: Path, mo
             served["closed"] = True
 
     monkeypatch.setattr(aibb.cli, "ThreadingHTTPServer", FakeServer)
-    previewed = CliRunner().invoke(app, ["preview", "--data-repo", str(destination), "--port", "0"])
+    previewed = CliRunner().invoke(
+        app,
+        ["preview", str(destination), "--port", "0", "--json"],
+    )
     assert previewed.exit_code == 0
     preview = json.loads(previewed.stdout)
+    assert preview["schema"] == "aibb-preview"
+    assert preview["schema_version"] == 1
     assert preview["url"] == "http://127.0.0.1:8123/"
     assert preview["warnings"][0]["code"] == "local-base-url"
     assert served["address"] == ("127.0.0.1", 0)

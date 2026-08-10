@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import re
+import shlex
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -30,8 +32,14 @@ from aibb.authors import (
     load_author_system_prompt,
     save_author_invocation,
 )
-from aibb.board import BoardPackage, load_board_package, load_run_board_package, resolve_board_state_root
-from aibb.config import load_archive_config, verify_archive_compatibility
+from aibb.board import (
+    BoardConfigurationError,
+    BoardPackage,
+    load_board_package,
+    load_run_board_package,
+    resolve_board_state_root,
+)
+from aibb.config import CompatibilityError, load_archive_config, verify_archive_compatibility
 from aibb.curator import (
     CuratorContributionError,
     create_administrator_category,
@@ -39,7 +47,7 @@ from aibb.curator import (
     create_curator_thread,
 )
 from aibb.customize import CustomizationComponent, materialize_board_customization
-from aibb.domain import load_archive
+from aibb.domain import ArchiveValidationError, load_archive
 from aibb.harness.amazon_bedrock import (
     BEDROCK_CONTEXT_WINDOW,
     amazon_bedrock_model,
@@ -79,6 +87,7 @@ from aibb.publish import check_publication, deploy_publication, prepare_publicat
 from aibb.runtime import BudgetLedger, RunManifest
 from aibb.runtime.models import (
     AmazonBedrockRouteConfiguration,
+    AuthorInvocation,
     BudgetLimits,
     OpenRouterRoutingConfiguration,
     ReasoningConfiguration,
@@ -102,13 +111,13 @@ config_app = typer.Typer(no_args_is_help=True, help="Inspect the board's expande
 customize_app = typer.Typer(no_args_is_help=True, help="Copy inherited defaults into the board for local editing.")
 author_app = typer.Typer(no_args_is_help=True, help="Register reusable private model-author invocations.")
 survey_app = typer.Typer(no_args_is_help=True, help="Collect private blind responses and reveal them together.")
-app.add_typer(publish_app, name="publish")
-app.add_typer(administrator_app, name="admin")
+app.add_typer(publish_app, name="publish", rich_help_panel="Review and publishing")
+app.add_typer(administrator_app, name="admin", rich_help_panel="Board management")
 app.add_typer(administrator_app, name="curator", hidden=True)
-app.add_typer(config_app, name="config")
-app.add_typer(customize_app, name="customize")
-app.add_typer(author_app, name="author")
-app.add_typer(survey_app, name="survey")
+app.add_typer(config_app, name="config", rich_help_panel="Board management")
+app.add_typer(customize_app, name="customize", rich_help_panel="Board management")
+app.add_typer(author_app, name="author", rich_help_panel="Board management")
+app.add_typer(survey_app, name="survey", rich_help_panel="Board management")
 
 
 @app.callback()
@@ -142,6 +151,10 @@ def _site_warnings(base_url: str) -> list[dict[str, str]]:
             }
         ]
     return []
+
+
+def _count_label(value: int, singular: str, plural: str | None = None) -> str:
+    return f"{value} {singular if value == 1 else plural or singular + 's'}"
 
 
 def _customize(data_repo: Path, component: CustomizationComponent) -> None:
@@ -186,10 +199,85 @@ def _resolve_cli_state_root(
         # but the same public/private containment rule still applies when it is
         # available.
         if (board / "board/aibb-board.yaml").is_file():
-            return resolve_board_state_root(board, load_board_package(board, board_config), override)
+            package = load_board_package(board, board_config)
+            resolved = resolve_board_state_root(board, package, override)
+            return _bind_state_root(board, resolved, board_id=package.configuration.id, allow_alternate=False)
         return override.expanduser().resolve()
     package = load_board_package(board, board_config)
-    return resolve_board_state_root(board, package)
+    return _bind_state_root(
+        board,
+        resolve_board_state_root(board, package),
+        board_id=package.configuration.id,
+        allow_alternate=package.configuration.runtime.state_root is None,
+    )
+
+
+def _checkout_id(board: Path) -> str:
+    """Return a private checkout identity that survives moving the repository."""
+
+    command = ["git", "-C", str(board), "config", "--local", "--get", "aibb.checkout-id"]
+    result = subprocess.run(command, capture_output=True, text=True)
+    value = result.stdout.strip()
+    if result.returncode == 0 and re.fullmatch(r"[a-f0-9]{32}", value):
+        return value
+    if result.returncode not in {0, 1}:
+        message = result.stderr.strip() or "unable to read local Git configuration"
+        raise BoardConfigurationError(f"Cannot identify the board checkout: {message}")
+    value = uuid.uuid4().hex
+    written = subprocess.run(
+        ["git", "-C", str(board), "config", "--local", "aibb.checkout-id", value],
+        capture_output=True,
+        text=True,
+    )
+    if written.returncode != 0:
+        message = written.stderr.strip() or "unable to write local Git configuration"
+        raise BoardConfigurationError(f"Cannot identify the board checkout: {message}")
+    return value
+
+
+def _bind_state_root(board: Path, state_root: Path, *, board_id: str, allow_alternate: bool) -> Path:
+    """Prevent two independent checkouts from silently sharing private state."""
+
+    root = board.resolve()
+    checkout_id = _checkout_id(root)
+    state_root.mkdir(parents=True, exist_ok=True)
+    binding_path = state_root / "board-binding.json"
+    expected = {
+        "schema": "aibb-board-state-binding",
+        "schema_version": 1,
+        "board_id": board_id,
+        "checkout_id": checkout_id,
+        "data_repo": str(root),
+    }
+    if binding_path.exists():
+        try:
+            existing = json.loads(binding_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise BoardConfigurationError(f"Invalid private board-state binding: {binding_path}") from error
+        if existing.get("board_id") != expected["board_id"] or existing.get("checkout_id") != checkout_id:
+            if allow_alternate:
+                alternate = state_root.with_name(f"{board_id}-{checkout_id[:8]}")
+                return _bind_state_root(board, alternate, board_id=board_id, allow_alternate=False)
+            raise BoardConfigurationError(
+                f"Private state {state_root} is already bound to another board checkout. "
+                "Use --state-root or configure runtime.state_root for this checkout."
+            )
+        previous_path = Path(str(existing.get("data_repo", ""))).expanduser()
+        if previous_path.resolve() != root and previous_path.exists():
+            raise BoardConfigurationError(
+                f"Private state {state_root} is already active for the checkout at {previous_path}. "
+                "Use a different --state-root for this copy."
+            )
+        if existing == expected:
+            return state_root
+    temporary = binding_path.with_name(f".{binding_path.name}-{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(expected, sort_keys=True) + "\n", encoding="utf-8")
+        temporary.chmod(0o600)
+        os.replace(temporary, binding_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return state_root
 
 
 def _review_required_payload(*, data_repo: Path, run_id: str, reason: str) -> dict[str, object]:
@@ -199,8 +287,8 @@ def _review_required_payload(*, data_repo: Path, run_id: str, reason: str) -> di
         "reason": reason,
         "review": {
             "status": f"git -C {data_repo} status --short",
-            "validate": f"aibb validate --data-repo {data_repo}",
-            "preview": f"aibb preview --data-repo {data_repo}",
+            "validate": f"aibb validate {data_repo}",
+            "preview": f"aibb preview {data_repo}",
             "accept": f"aibb accept {data_repo} --run {run_id}",
         },
     }
@@ -275,17 +363,27 @@ def _read_system_prompt_options(
 
 @config_app.command("show")
 def show_board_config(
-    data_repo: Annotated[
+    board: Annotated[
         Path,
-        typer.Option(
-            "--data-repo",
+        typer.Argument(
             exists=True,
             file_okay=False,
             dir_okay=True,
             resolve_path=True,
-            help="Path to the public board data repository.",
+            help="Board data repository; defaults to the current directory.",
         ),
-    ],
+    ] = Path("."),
+    legacy_data_repo: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-repo",
+            hidden=True,
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+        ),
+    ] = None,
     output_format: Annotated[
         Literal["yaml", "json"],
         typer.Option("--format", help="Machine-readable output format."),
@@ -293,11 +391,15 @@ def show_board_config(
 ) -> None:
     """Show the complete inherited and overridden board contract."""
 
-    board = load_board_package(data_repo)
+    data_repo = _resolve_board_argument(board, legacy_data_repo)
+    try:
+        package = load_board_package(data_repo)
+    except BoardConfigurationError as error:
+        raise typer.BadParameter(str(error)) from error
     payload = {
-        "board_package_sha256": board.digest,
-        "component_sources": board.component_sources,
-        "effective": board.configuration.model_dump(mode="json", exclude_none=True),
+        "board_package_sha256": package.digest,
+        "component_sources": package.component_sources,
+        "effective": package.configuration.model_dump(mode="json", exclude_none=True),
     }
     if output_format == "json":
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
@@ -359,7 +461,7 @@ def _is_safely_suspended(events: list[object]) -> bool:
     return False
 
 
-@app.command("probe-bedrock-sonnet")
+@app.command("probe-bedrock-sonnet", rich_help_panel="Advanced")
 def probe_bedrock_sonnet(
     region: Annotated[
         list[str] | None,
@@ -516,7 +618,7 @@ def administrator_thread(
     typer.echo(json.dumps(result, ensure_ascii=False, sort_keys=True))
 
 
-@app.command("watch-run")
+@app.command("watch-run", rich_help_panel="Run operations")
 def watch_run(
     board: Annotated[
         Path,
@@ -578,7 +680,7 @@ def watch_run(
         typer.echo("Stopped watching; model runs were not interrupted.")
 
 
-@app.command("preview-run-context")
+@app.command("preview-run-context", rich_help_panel="Run operations")
 def preview_run_context(
     run_id: Annotated[str, typer.Option("--run-id", help="Run whose current checkpoint should be previewed.")],
     state_root: Annotated[
@@ -621,7 +723,7 @@ def preview_run_context(
         typer.echo(str(output.resolve()))
 
 
-@app.command("extend-inference-budget")
+@app.command("extend-inference-budget", rich_help_panel="Run operations")
 def extend_inference_budget(
     run_id: Annotated[str, typer.Option("--run-id", help="Suspended run ID to extend.")],
     reason: Annotated[
@@ -704,7 +806,7 @@ def extend_inference_budget(
     )
 
 
-@app.command("extend-web-budget")
+@app.command("extend-web-budget", rich_help_panel="Run operations")
 def extend_web_budget(
     run_id: Annotated[str, typer.Option("--run-id", help="Suspended run ID to extend.")],
     reason: Annotated[
@@ -814,7 +916,7 @@ def _validate_rewind_boundary(messages: list[dict[str, object]]) -> None:
         raise typer.BadParameter("The rewind target would retain assistant tool calls without their results")
 
 
-@app.command("rewind-run-context")
+@app.command("rewind-run-context", rich_help_panel="Run operations")
 def rewind_run_context(
     run_id: Annotated[str, typer.Option("--run-id", help="Suspended run whose model-visible context is rewound.")],
     expected_message_count: Annotated[
@@ -984,7 +1086,7 @@ def publish_deploy(
     typer.echo(output)
 
 
-@app.command()
+@app.command(rich_help_panel="Advanced")
 def doctor(
     data_repo: Annotated[
         Path,
@@ -1032,47 +1134,72 @@ def doctor(
     )
 
 
-@app.command("validate")
+@app.command("validate", rich_help_panel="Common commands")
 def validate_archive(
-    data_repo: Annotated[
+    board: Annotated[
         Path,
-        typer.Option(
-            "--data-repo",
+        typer.Argument(
             exists=True,
             file_okay=False,
             dir_okay=True,
             resolve_path=True,
-            help="Path to the public board data repository.",
+            help="Board data repository; defaults to the current directory.",
         ),
-    ],
+    ] = Path("."),
+    legacy_data_repo: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-repo",
+            hidden=True,
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+        ),
+    ] = None,
     board_config: Annotated[
         Path | None,
         typer.Option("--board-config", exists=True, file_okay=True, dir_okay=False, resolve_path=True),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit a versioned machine-readable result."),
+    ] = False,
 ) -> None:
     """Validate every public record and relationship without changing source."""
 
-    corpus = load_archive(data_repo)
-    board = load_board_package(data_repo, board_config)
+    data_repo = _resolve_board_argument(board, legacy_data_repo)
+    try:
+        corpus = load_archive(data_repo)
+        package = load_board_package(data_repo, board_config)
+    except (ArchiveValidationError, BoardConfigurationError) as error:
+        raise typer.BadParameter(str(error)) from error
+    payload = {
+        "schema": "aibb-validate",
+        "schema_version": 1,
+        "authors": len(corpus.authors),
+        "board_id": package.configuration.id,
+        "categories": len(corpus.categories),
+        "contributions": len(corpus.contributions),
+        "documents": len(corpus.documents),
+        "profiles": len(corpus.profiles),
+        "status": "valid",
+        "threads": len(corpus.threads),
+        "warnings": [*_board_warnings(package), *_site_warnings(corpus.site.base_url)],
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+        return
     typer.echo(
-        json.dumps(
-            {
-                "authors": len(corpus.authors),
-                "board_id": board.configuration.id,
-                "categories": len(corpus.categories),
-                "contributions": len(corpus.contributions),
-                "documents": len(corpus.documents),
-                "profiles": len(corpus.profiles),
-                "status": "valid",
-                "threads": len(corpus.threads),
-                "warnings": [*_board_warnings(board), *_site_warnings(corpus.site.base_url)],
-            },
-            sort_keys=True,
-        )
+        f"Valid board at {data_repo}: {_count_label(len(corpus.categories), 'category', 'categories')}, "
+        f"{_count_label(len(corpus.threads), 'thread')}, {_count_label(len(corpus.contributions), 'post')}, "
+        f"{_count_label(len(corpus.authors), 'author')}."
     )
+    for warning in payload["warnings"]:
+        typer.echo(f"Warning [{warning['code']}] {warning['path']}: {warning['message']}", err=True)
 
 
-@app.command("accept")
+@app.command("accept", rich_help_panel="Review and publishing")
 def accept_visit(
     board: Annotated[
         Path,
@@ -1112,19 +1239,29 @@ def accept_visit(
     typer.echo(json.dumps(result.model_dump(mode="json", exclude_none=True), sort_keys=True))
 
 
-@app.command("build")
+@app.command("build", rich_help_panel="Common commands")
 def build_archive(
-    data_repo: Annotated[
+    board: Annotated[
         Path,
-        typer.Option(
-            "--data-repo",
+        typer.Argument(
             exists=True,
             file_okay=False,
             dir_okay=True,
             resolve_path=True,
-            help="Path to the public board data repository.",
+            help="Board data repository; defaults to the current directory.",
         ),
-    ],
+    ] = Path("."),
+    legacy_data_repo: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-repo",
+            hidden=True,
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+        ),
+    ] = None,
     output: Annotated[
         Path,
         typer.Option("--output", file_okay=False, resolve_path=True, help="Static-site output directory."),
@@ -1133,66 +1270,103 @@ def build_archive(
         Path | None,
         typer.Option("--board-config", exists=True, file_okay=True, dir_okay=False, resolve_path=True),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit a versioned machine-readable result."),
+    ] = False,
 ) -> None:
     """Build the complete crawlable archive from a data checkout."""
 
-    result = build_site(data_repo, output, board_config=board_config)
+    data_repo = _resolve_board_argument(board, legacy_data_repo)
+    try:
+        result = build_site(data_repo, output, board_config=board_config)
+    except (ArchiveValidationError, BoardConfigurationError, CompatibilityError) as error:
+        raise typer.BadParameter(str(error)) from error
+    payload = {
+        "schema": "aibb-build",
+        "schema_version": 1,
+        "categories": result.categories,
+        "contributions": result.contributions,
+        "documents": result.documents,
+        "files": result.files,
+        "output": str(result.output),
+        "status": "built",
+        "threads": result.threads,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+        return
     typer.echo(
-        json.dumps(
-            {
-                "categories": result.categories,
-                "contributions": result.contributions,
-                "documents": result.documents,
-                "files": result.files,
-                "output": str(result.output),
-                "status": "built",
-                "threads": result.threads,
-            },
-            sort_keys=True,
-        )
+        f"Built {_count_label(result.files, 'file')} at {result.output} "
+        f"({_count_label(result.categories, 'category', 'categories')}, "
+        f"{_count_label(result.threads, 'thread')}, {_count_label(result.contributions, 'post')})."
     )
 
 
-@app.command("preview")
+@app.command("preview", rich_help_panel="Common commands")
 def preview_archive(
-    data_repo: Annotated[
+    board_path: Annotated[
         Path,
-        typer.Option(
-            "--data-repo",
+        typer.Argument(
             exists=True,
             file_okay=False,
             dir_okay=True,
             resolve_path=True,
-            help="Path to the public board data repository.",
+            help="Board data repository; defaults to the current directory.",
         ),
     ] = Path("."),
+    legacy_data_repo: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-repo",
+            hidden=True,
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+        ),
+    ] = None,
     host: Annotated[str, typer.Option("--host", help="Interface for the local review server.")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", min=0, max=65535, help="Local review port.")] = 8000,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit a versioned machine-readable startup result."),
+    ] = False,
 ) -> None:
     """Validate, build, and serve a disposable local review site."""
 
-    corpus = load_archive(data_repo)
-    board = load_board_package(data_repo)
+    data_repo = _resolve_board_argument(board_path, legacy_data_repo)
+    try:
+        corpus = load_archive(data_repo)
+        board = load_board_package(data_repo)
+    except (ArchiveValidationError, BoardConfigurationError) as error:
+        raise typer.BadParameter(str(error)) from error
     with tempfile.TemporaryDirectory(prefix="aibb-preview-") as temporary:
         output = Path(temporary) / "site"
-        result = build_site(data_repo, output)
+        try:
+            result = build_site(data_repo, output)
+        except (ArchiveValidationError, BoardConfigurationError, CompatibilityError) as error:
+            raise typer.BadParameter(str(error)) from error
         handler = partial(SimpleHTTPRequestHandler, directory=str(output))
         server = ThreadingHTTPServer((host, port), handler)
         actual_host, actual_port = server.server_address[:2]
         display_host = "127.0.0.1" if actual_host in {"0.0.0.0", "::"} else actual_host
-        typer.echo(
-            json.dumps(
-                {
-                    "board_id": board.configuration.id,
-                    "canonical_url": corpus.site.base_url,
-                    "files": result.files,
-                    "status": "serving",
-                    "url": f"http://{display_host}:{actual_port}/",
-                    "warnings": [*_board_warnings(board), *_site_warnings(corpus.site.base_url)],
-                },
-                sort_keys=True,
-            )
-        )
+        payload = {
+            "schema": "aibb-preview",
+            "schema_version": 1,
+            "board_id": board.configuration.id,
+            "canonical_url": corpus.site.base_url,
+            "files": result.files,
+            "status": "serving",
+            "url": f"http://{display_host}:{actual_port}/",
+            "warnings": [*_board_warnings(board), *_site_warnings(corpus.site.base_url)],
+        }
+        if json_output:
+            typer.echo(json.dumps(payload, sort_keys=True))
+        else:
+            typer.echo(f"Serving {data_repo} at {payload['url']}")
+            for warning in payload["warnings"]:
+                typer.echo(f"Warning [{warning['code']}] {warning['path']}: {warning['message']}", err=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
@@ -1201,7 +1375,7 @@ def preview_archive(
             server.server_close()
 
 
-@app.command("init-data")
+@app.command("init-data", rich_help_panel="Advanced")
 def init_data(
     destination: Annotated[
         Path,
@@ -1230,7 +1404,7 @@ def init_data(
     )
 
 
-@app.command("new-board")
+@app.command("new-board", rich_help_panel="Common commands")
 def new_board(
     destination: Annotated[
         Path,
@@ -1261,8 +1435,12 @@ def new_board(
     ] = "A public bulletin board written by AI models.",
     board_id: Annotated[
         str | None,
-        typer.Option("--board-id", help="Stable runtime namespace; defaults from the title or destination name."),
+        typer.Option("--board-id", help="Stable record namespace; defaults from the title or destination name."),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit a versioned machine-readable result instead of the human quickstart."),
+    ] = False,
 ) -> None:
     """Create a minimal configurable board package with an independent Git history."""
 
@@ -1274,25 +1452,42 @@ def new_board(
         description=description,
         board_id=board_id,
     )
+    payload = {
+        "schema": "aibb-new-board",
+        "schema_version": 1,
+        "board_id": result.board_id,
+        "destination": str(result.destination),
+        "initial_revision": result.initial_revision,
+        "next": {
+            "build": f"aibb build {result.destination} --output {result.destination}/dist",
+            "configure": str(result.destination / "content/site.yaml"),
+            "preview": f"aibb preview {result.destination}",
+            "provider_setup": "Set OPENROUTER_API_KEY in the environment.",
+            "run": (
+                f"aibb run {result.destination} --provider openrouter "
+                "--model deepseek/deepseek-v4-flash-0731"
+            ),
+        },
+        "status": "initialized",
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+        return
+
+    quoted_destination = shlex.quote(str(result.destination))
     typer.echo(
-        json.dumps(
-            {
-                "board_id": result.board_id,
-                "destination": str(result.destination),
-                "initial_revision": result.initial_revision,
-                "next": {
-                    "build": f"aibb build --data-repo {result.destination} --output {result.destination}/dist",
-                    "configure": str(result.destination / "content/site.yaml"),
-                    "preview": f"aibb preview --data-repo {result.destination}",
-                    "provider_setup": "Set OPENROUTER_API_KEY in the environment.",
-                    "run": (
-                        f"aibb run {result.destination} --provider openrouter "
-                        "--model deepseek/deepseek-v4-flash-0731"
-                    ),
-                },
-                "status": "initialized",
-            },
-            sort_keys=True,
+        "\n".join(
+            [
+                f"Created board at {result.destination}",
+                "",
+                f"Board settings: {result.destination / 'board/aibb-board.yaml'}",
+                f"Site identity:  {result.destination / 'content/site.yaml'}",
+                "",
+                "Next:",
+                f"  cd {quoted_destination}",
+                "  export OPENROUTER_API_KEY=...",
+                "  aibb run --provider openrouter --model deepseek/deepseek-v4-flash-0731",
+            ]
         )
     )
 
@@ -1448,13 +1643,20 @@ def list_authors(
         typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
     ] = Path("."),
     state_root: Annotated[Path | None, typer.Option("--state-root", file_okay=False, resolve_path=True)] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit a versioned machine-readable result."),
+    ] = False,
 ) -> None:
     """List reusable authors registered for this board."""
 
     data_repo = board.resolve()
-    package = load_board_package(data_repo)
-    resolved_state = _resolve_cli_state_root(data_repo, state_root)
-    public_authors = load_archive(data_repo).authors
+    try:
+        package = load_board_package(data_repo)
+        resolved_state = _resolve_cli_state_root(data_repo, state_root)
+        public_authors = load_archive(data_repo).authors
+    except (ArchiveValidationError, BoardConfigurationError) as error:
+        raise typer.BadParameter(str(error)) from error
     payload = [
         {
             "author_id": invocation.author_id,
@@ -1468,7 +1670,26 @@ def list_authors(
         }
         for invocation in list_author_invocations(resolved_state, board_id=package.configuration.id)
     ]
-    typer.echo(json.dumps({"authors": payload, "board_id": package.configuration.id}, ensure_ascii=False, indent=2))
+    result = {
+        "schema": "aibb-author-list",
+        "schema_version": 1,
+        "authors": payload,
+        "board_id": package.configuration.id,
+        "board": str(data_repo),
+    }
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    if not payload:
+        typer.echo(f"No registered authors for {data_repo}.")
+        return
+    typer.echo(f"Registered authors for {data_repo}:")
+    for author in payload:
+        published = "; published" if author["published_author"] else ""
+        typer.echo(
+            f"  {author['author_id']} — {author['display_name']} "
+            f"({author['provider']}: {author['model']}{published})"
+        )
 
 
 @survey_app.command("create")
@@ -1592,7 +1813,7 @@ def reveal_blind_survey(
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
 
 
-@app.command("run")
+@app.command("run", no_args_is_help=True, rich_help_panel="Common commands")
 def run_model(
     board: Annotated[
         Path,
@@ -1839,7 +2060,10 @@ def run_model(
     """Start or resume a controlled model visit in the terminal."""
 
     data_repo = _resolve_board_argument(board, legacy_data_repo)
-    board_package = load_board_package(data_repo, board_config)
+    try:
+        board_package = load_board_package(data_repo, board_config)
+    except BoardConfigurationError as error:
+        raise typer.BadParameter(str(error)) from error
     budget_defaults = board_package.configuration.visits.budgets
     contribution_quota = budget_defaults.post_limit
     if post_limit is not None:
@@ -1871,8 +2095,11 @@ def run_model(
         max_web_cost_usd if max_web_cost_usd is not None else budget_defaults.max_web_cost_usd
     )
     curator_note = legacy_curator_note if legacy_curator_note is not None else administrator_note
-    state_root = _resolve_cli_state_root(data_repo, state_root, board_config=board_config)
-    site = load_archive(data_repo).site
+    try:
+        state_root = _resolve_cli_state_root(data_repo, state_root, board_config=board_config)
+        site = load_archive(data_repo).site
+    except (ArchiveValidationError, BoardConfigurationError) as error:
+        raise typer.BadParameter(str(error)) from error
     author_invocation = None
     if resume_run and author_id:
         raise typer.BadParameter("--resume and --author are different lifecycle operations; choose one")
@@ -2186,6 +2413,7 @@ def run_model(
                 asyncio.run(fetch_openrouter_image_model(image_generation_model, api_key=openrouter_api_key))
         effective_total_tokens = max_total_tokens or max(250_000, max_provider_turns * 60_000)
         normalized_model = _normalized_model_name(selected_provider, model)
+        pending_author_save: tuple[AuthorInvocation, bytes | None, bool] | None = None
         if author_invocation is None:
             collisions = model_identity_collisions(data_repo, state_root, normalized_model)
             registered_collisions = [
@@ -2224,71 +2452,79 @@ def run_model(
                     system_prompt_source_url=system_prompt_source_url,
                     repeat_reason=allow_repeat_reason,
                 )
-                save_author_invocation(state_root, author_invocation, system_prompt_bytes=prompt_bytes)
             except AuthorInvocationError as error:
                 raise typer.BadParameter(str(error)) from error
+            pending_author_save = (author_invocation, prompt_bytes, False)
         elif author_invocation.reasoning is None:
             author_invocation = author_invocation.model_copy(update={"reasoning": reasoning_configuration})
             prompt_bytes = system_prompt_text.encode("utf-8") if system_prompt_text is not None else None
+            pending_author_save = (author_invocation, prompt_bytes, True)
+        assert author_invocation is not None
+        invocation_snapshot = author_invocation.model_dump(mode="json", exclude_none=True)
+        try:
+            manifest, run_dir = create_run_manifest(
+                data_repo=data_repo,
+                state_root=state_root,
+                model_id=model,
+                display_name=effective_display_name,
+                generation=generation,
+                lineage=lineage,
+                mode=mode,
+                compaction_policy=compaction_policy or ("deny" if mode == "headless" else "ask"),
+                contribution_quota=contribution_quota,
+                max_output_tokens=effective_output_tokens,
+                max_provider_turns=max_provider_turns,
+                max_total_tokens=effective_total_tokens,
+                max_cost_usd=effective_cost_usd,
+                max_contributions_per_thread=max_contributions_per_thread,
+                model_context_window=catalog_context_window,
+                model_max_completion_tokens=catalog_max_completion,
+                prompt_price_per_token=prompt_price,
+                completion_price_per_token=completion_price,
+                allow_repeat_reason=allow_repeat_reason,
+                developer=developer,
+                model_input_modalities=catalog_input_modalities,
+                reasoning=reasoning_configuration,
+                openrouter_routing=openrouter_routing_configuration,
+                amazon_bedrock_routing=amazon_bedrock_routing_configuration,
+                tool_choice=tool_choice,
+                image_input_supported=image_input_supported,
+                image_input_source="catalog" if image_input == "auto" else "curator-override",
+                image_capabilities_enabled=image_capabilities_enabled,
+                image_generation_model=(
+                    image_generation_model if image_capabilities_enabled and effective_generated_images else None
+                ),
+                max_generated_images=effective_generated_images if image_capabilities_enabled else 0,
+                max_imported_images=max_imported_images if image_capabilities_enabled else 0,
+                max_image_cost_usd=max_image_cost_usd,
+                max_web_calls=max_web_calls,
+                max_web_cost_usd=max_web_cost_usd,
+                provider=selected_provider,
+                endpoint=endpoint,
+                system_prompt_text=system_prompt_text,
+                system_prompt_label=system_prompt_label,
+                system_prompt_source_url=system_prompt_source_url,
+                normalized_model_id=normalized_model,
+                board_config=board_config,
+                author_id=author_invocation.author_id,
+                author_invocation_snapshot=invocation_snapshot,
+                author_invocation_sha256=author_invocation.canonical_sha256(),
+            )
+        except ValueError as error:
+            raise typer.BadParameter(str(error)) from error
+        if pending_author_save is not None:
+            pending_invocation, pending_prompt, replace_registration = pending_author_save
             try:
                 save_author_invocation(
                     state_root,
-                    author_invocation,
-                    system_prompt_bytes=prompt_bytes,
-                    replace=True,
+                    pending_invocation,
+                    system_prompt_bytes=pending_prompt,
+                    replace=replace_registration,
                 )
             except AuthorInvocationError as error:
-                raise typer.BadParameter(str(error)) from error
-        assert author_invocation is not None
-        invocation_snapshot = author_invocation.model_dump(mode="json", exclude_none=True)
-        manifest, run_dir = create_run_manifest(
-            data_repo=data_repo,
-            state_root=state_root,
-            model_id=model,
-            display_name=effective_display_name,
-            generation=generation,
-            lineage=lineage,
-            mode=mode,
-            compaction_policy=compaction_policy or ("deny" if mode == "headless" else "ask"),
-            contribution_quota=contribution_quota,
-            max_output_tokens=effective_output_tokens,
-            max_provider_turns=max_provider_turns,
-            max_total_tokens=effective_total_tokens,
-            max_cost_usd=effective_cost_usd,
-            max_contributions_per_thread=max_contributions_per_thread,
-            model_context_window=catalog_context_window,
-            model_max_completion_tokens=catalog_max_completion,
-            prompt_price_per_token=prompt_price,
-            completion_price_per_token=completion_price,
-            allow_repeat_reason=allow_repeat_reason,
-            developer=developer,
-            model_input_modalities=catalog_input_modalities,
-            reasoning=reasoning_configuration,
-            openrouter_routing=openrouter_routing_configuration,
-            amazon_bedrock_routing=amazon_bedrock_routing_configuration,
-            tool_choice=tool_choice,
-            image_input_supported=image_input_supported,
-            image_input_source="catalog" if image_input == "auto" else "curator-override",
-            image_capabilities_enabled=image_capabilities_enabled,
-            image_generation_model=(
-                image_generation_model if image_capabilities_enabled and effective_generated_images else None
-            ),
-            max_generated_images=effective_generated_images if image_capabilities_enabled else 0,
-            max_imported_images=max_imported_images if image_capabilities_enabled else 0,
-            max_image_cost_usd=max_image_cost_usd,
-            max_web_calls=max_web_calls,
-            max_web_cost_usd=max_web_cost_usd,
-            provider=selected_provider,
-            endpoint=endpoint,
-            system_prompt_text=system_prompt_text,
-            system_prompt_label=system_prompt_label,
-            system_prompt_source_url=system_prompt_source_url,
-            normalized_model_id=normalized_model,
-            board_config=board_config,
-            author_id=author_invocation.author_id,
-            author_invocation_snapshot=invocation_snapshot,
-            author_invocation_sha256=author_invocation.canonical_sha256(),
-        )
+                raise typer.BadParameter(
+                    f"Run {manifest.run_id} was created, but its reusable author registration failed: {error}"
+                ) from error
         run_id = manifest.run_id
         run_board = load_run_board_package(run_dir, data_repo)
         board_warnings = _board_warnings(run_board)
@@ -2478,3 +2714,27 @@ def run_model(
             raise typer.Exit(code=1)
         return
     typer.echo(json.dumps(payload, sort_keys=True))
+
+
+# Typer preserves definition order, while this module keeps low-level helpers
+# near the operations they support. Present the operator workflow first without
+# coupling source layout to the help-page information architecture.
+_HELP_PANEL_ORDER = {
+    "Common commands": 0,
+    "Review and publishing": 1,
+    "Run operations": 2,
+    "Advanced": 3,
+    "Board management": 4,
+}
+app.registered_commands.sort(
+    key=lambda command: (
+        _HELP_PANEL_ORDER.get(command.rich_help_panel, 99),
+        command.name or command.callback.__name__,
+    )
+)
+app.registered_groups.sort(
+    key=lambda group: (
+        _HELP_PANEL_ORDER.get(group.rich_help_panel, 99),
+        str(group.name),
+    )
+)

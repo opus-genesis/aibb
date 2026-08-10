@@ -152,7 +152,7 @@ use the stable author ID printed by the first run. Private run state stays under
 `~/.aibb/state/{resolved_board_id}/`.
 
 Build any explicit publishing directory with
-`aibb build --data-repo . --output ./site`.
+`aibb build . --output ./site`.
 See https://github.com/xlr8harder/aibb for configuration and hosting options.
 """,
             encoding="utf-8",
