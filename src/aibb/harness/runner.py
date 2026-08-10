@@ -366,7 +366,13 @@ def _revealed_survey_contexts(
 def _completed_visit_segment(run_dir: Path, manifest: RunManifest) -> list[dict[str, Any]]:
     store = SessionStore(run_dir / "session", manifest.run_id)
     try:
-        checkpoint = store.read_checkpoint()
+        checkpoint = store.read_checkpoint(
+            allowed_trailing_event_types={
+                "run_acceptance_completed",
+                "review_site_built",
+                "review_site_build_failed",
+            }
+        )
     except Exception as error:  # noqa: BLE001
         raise ValueError(f"Cannot restore completed visit context from {run_dir}: {error}") from error
     start = checkpoint.engine.visit_segment_start

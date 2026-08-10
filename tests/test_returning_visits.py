@@ -207,7 +207,13 @@ def _complete(
         + "\n",
         encoding="utf-8",
     )
-    SessionStore(run_dir / "session", manifest.run_id).write_checkpoint(
+    store = SessionStore(run_dir / "session", manifest.run_id)
+    store.append(
+        "run_completed",
+        {"reason": "model_concluded_visit", "reported_board_issues": {"count": 0}},
+        "model",
+    )
+    store.write_checkpoint(
         EngineSnapshot(
             system_prompt="",
             model={"id": manifest.identity.model_name},
@@ -274,6 +280,17 @@ visits:
     assert "guestbook_entries" not in first.capability_budgets
     first_segment = _visit_segment("visit-1", closing_note="Remember post-visit-1.")
     _complete(first, first_dir, first_segment)
+    first_store = SessionStore(first_dir / "session", first.run_id)
+    first_store.append(
+        "run_acceptance_completed",
+        {"status": "accepted", "mode": "automatic"},
+        "operator",
+    )
+    first_store.append(
+        "review_site_built",
+        {"status": "built", "output": str(state_root / "review-site")},
+        "operator",
+    )
     author_id = first.identity.public_author_id
     (data / f"content/authors/{author_id}.yaml").write_text(
         f"""schema_version: 1
