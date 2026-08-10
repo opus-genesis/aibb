@@ -1426,7 +1426,6 @@ async def run_model_visit(
                 "operator",
             )
             store.write_checkpoint(engine.snapshot())
-            context_digest = store.read_events()[0].payload.get("context_digest", "restored")
         else:
             scope = await bridge.read_text_resource("aibb://run/current")
             return_continuity = _load_return_continuity(run_dir, manifest)
@@ -1513,14 +1512,7 @@ async def run_model_visit(
                 archive_title=_archive_title(manifest),
                 operator_label=operator_label,
             )
-            context_digest = envelope.digest
-
         engine.agent.subscribe(lambda event, _signal: _record_agent_event(store, event))
-        console.print(f"[bold]{escape(_archive_title(manifest))} run[/bold] {manifest.run_id}")
-        console.print(f"Model: {manifest.identity.model_name}")
-        console.print(f"Context: {context_digest}")
-        console.print(f"Remaining: {ledger.remaining()}")
-
         def finish_run(
             event_type: Literal["run_completed", "run_suspended"],
             payload: dict[str, Any],

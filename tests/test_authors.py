@@ -151,7 +151,17 @@ def test_author_cli_registers_without_creating_a_public_visitor_and_run_uses_bin
     monkeypatch.setattr("aibb.cli.run_model_visit", fake_run)
     result = CliRunner().invoke(
         app,
-        ["run", str(data), "--state-root", str(state), "--author", "inkling-prompted", "--mode", "headless"],
+        [
+            "run",
+            str(data),
+            "--state-root",
+            str(state),
+            "--author",
+            "inkling-prompted",
+            "--mode",
+            "headless",
+            "--json",
+        ],
     )
 
     assert result.exit_code == 0, result.output

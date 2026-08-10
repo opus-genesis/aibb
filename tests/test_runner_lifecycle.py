@@ -217,7 +217,7 @@ def test_run_reports_a_missing_board_as_operator_input_without_a_traceback(tmp_p
 
 
 def test_run_cli_exposes_public_developer_override() -> None:
-    result = CliRunner().invoke(app, ["run", "--help"])
+    result = CliRunner().invoke(app, ["run", "--help"], terminal_width=160)
     run_command = get_command(app).commands["run"]
     option_names = {name for parameter in run_command.params for name in getattr(parameter, "opts", [])}
 
@@ -228,7 +228,65 @@ def test_run_cli_exposes_public_developer_override() -> None:
     assert "--author" in option_names
     assert "--return-as" not in option_names
     assert "presentation-poor" in result.output
-    assert "inferred from provider" in result.output
+    display_option = next(parameter for parameter in run_command.params if "--display-name" in parameter.opts)
+    assert "inferred from provider" in display_option.help
+
+
+def test_run_defaults_to_headless_live_watch_with_concise_human_output(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    data = tmp_path / "board"
+    create_board(destination=data, title="Test Board")
+    observed: dict[str, object] = {}
+
+    async def fake_fetch_model(_model_id: str) -> OpenRouterModelRecord:
+        return OpenRouterModelRecord(
+            id="example/model",
+            name="Example: Model",
+            context_length=128_000,
+            pricing={"prompt": "0.000001", "completion": "0.000002"},
+            architecture={"input_modalities": ["text"]},
+            supported_parameters=["tools", "reasoning"],
+            top_provider={"max_completion_tokens": 16_000},
+        )
+
+    async def fake_run_model_visit(**kwargs):
+        observed["run"] = kwargs
+        return Path(kwargs["run_dir"]).name
+
+    def fake_watch_event_stream(run_dir: Path, **kwargs) -> None:
+        observed["watch"] = {"run_dir": run_dir, **kwargs}
+
+    monkeypatch.setenv("AIBB_HOME", str(tmp_path / "aibb-home"))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "private-openrouter-token")
+    monkeypatch.setattr("aibb.cli.fetch_openrouter_model", fake_fetch_model)
+    monkeypatch.setattr("aibb.cli.run_model_visit", fake_run_model_visit)
+    monkeypatch.setattr("aibb.cli.watch_event_stream", fake_watch_event_stream)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", str(data), "--provider", "openrouter", "--model", "example/model", "--images", "disable"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.startswith("Starting Model on Test Board\n")
+    assert "Runtime   headless" in result.output
+    assert "Limits    5 posts" in result.output
+    assert "Watching reasoning, tool calls, and usage." in result.output
+    assert "package_sha256" not in result.output
+    assert "Remaining:" not in result.output
+    assert "curator>" not in result.output
+    run_kwargs = observed["run"]
+    assert isinstance(run_kwargs, dict)
+    assert run_kwargs["console"] is not None
+    manifest = RunManifest.load(Path(run_kwargs["run_dir"]) / "manifest.json")
+    assert manifest.mode == "headless"
+    watch_kwargs = observed["watch"]
+    assert isinstance(watch_kwargs, dict)
+    assert watch_kwargs["from_start"] is True
+    assert watch_kwargs["show_reasoning"] is True
+    assert watch_kwargs["stop_on_terminal"] is True
 
 
 def test_cli_reports_installed_version() -> None:
@@ -834,6 +892,7 @@ def test_cli_uses_board_visit_budgets_and_allows_per_run_overrides(tmp_path: Pat
             "example/visual-model",
             "--mode",
             "headless",
+            "--json",
             "--post-limit",
             "4",
             "--max-web-calls",
@@ -955,6 +1014,7 @@ def test_cli_creates_tinker_inkling_small_run_with_route_independent_public_iden
             TINKER_INKLING_SMALL_SERVERLESS_256K,
             "--mode",
             "headless",
+            "--json",
         ],
     )
 

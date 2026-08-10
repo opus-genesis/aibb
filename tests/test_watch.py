@@ -559,6 +559,24 @@ def test_single_run_watcher_waits_through_suspension_for_resume(tmp_path: Path, 
     assert "run completed · model_concluded_visit · Resumable (example/Resumable)" in rendered
 
 
+def test_integrated_watcher_stops_at_a_suspended_terminal_outcome(tmp_path: Path) -> None:
+    run_dir = _write_run(
+        tmp_path,
+        "run-watch-integrated-suspension",
+        datetime.now(UTC),
+        "Suspended",
+        completed=False,
+    )
+    with (run_dir / "session/events.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"type": "run_suspended", "payload": {"reason": "provider error"}}) + "\n")
+    output = StringIO()
+
+    watch_event_stream(run_dir, output=output, poll_seconds=0.001, stop_on_terminal=True)
+
+    rendered = output.getvalue()
+    assert "run suspended · provider error · Suspended (example/Suspended)" in rendered
+
+
 def test_new_events_only_watcher_still_names_bound_model(tmp_path: Path) -> None:
     now = datetime.now(UTC)
     run_dir = _write_completed_run(tmp_path, "run-watch-tail", now, "Event Identity")

@@ -266,6 +266,7 @@ def test_run_cli_applies_configured_acceptance_policy(
             "Claude 3 Opus",
             "--mode",
             "headless",
+            "--json",
             "--images",
             "disable",
         ],

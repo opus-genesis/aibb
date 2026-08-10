@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import os
 import re
@@ -11,6 +12,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -311,6 +313,172 @@ def _build_accepted_review_site(*, data_repo: Path, run_dir: Path, run_id: str) 
     }
     store.append("review_site_built", payload, "operator")
     return payload
+
+
+def _compact_path(path: Path) -> str:
+    """Render an operator path without obscuring where private state lives."""
+
+    resolved = path.resolve()
+    try:
+        return f"~/{resolved.relative_to(Path.home())}"
+    except ValueError:
+        return str(resolved)
+
+
+def _run_ready_payload(
+    *,
+    manifest: RunManifest,
+    run_dir: Path,
+    board: BoardPackage,
+    board_title: str,
+    model_context_window: int,
+    model_max_completion_tokens: int | None,
+    image_input_source: str,
+    image_generation_model: str | None,
+    openrouter_routing: OpenRouterRoutingConfiguration | None,
+    tool_choice: str,
+    warnings: list[dict[str, str]],
+    publication_lane: str,
+) -> dict[str, object]:
+    visit: dict[str, object]
+    if manifest.return_visit is not None:
+        visit = {
+            "kind": "returning",
+            "number": manifest.return_visit.visit_number,
+            "public_author_id": manifest.identity.public_author_id,
+            "previous_run_id": manifest.return_visit.previous_run_id,
+        }
+    else:
+        visit = {
+            "kind": "first",
+            "number": 1,
+            "public_author_id": manifest.identity.public_author_id,
+        }
+    return {
+        "schema": "aibb.run.ready",
+        "schema_version": 1,
+        "run_id": manifest.run_id,
+        "state": str(run_dir),
+        "status": "ready",
+        "mode": manifest.mode,
+        "provider": manifest.identity.provider,
+        "model": manifest.identity.model_name,
+        "display_name": manifest.identity.display_name,
+        "model_context_window": model_context_window,
+        "model_max_completion_tokens": model_max_completion_tokens,
+        "output_tokens_per_turn": manifest.max_output_tokens_per_turn,
+        "max_total_tokens": manifest.inference_budget.max_total_tokens,
+        "max_cost_usd": manifest.inference_budget.max_cost_usd,
+        "image_input_supported": manifest.image_input_supported,
+        "image_input_source": image_input_source,
+        "image_capabilities_enabled": manifest.image_capabilities_enabled,
+        "image_generation_model": image_generation_model,
+        "developer": manifest.identity.developer,
+        "reasoning": manifest.reasoning.model_dump(mode="json"),
+        "openrouter_routing": openrouter_routing.model_dump(mode="json") if openrouter_routing else None,
+        "tool_choice": tool_choice,
+        "system_prompt": (
+            {
+                "label": manifest.system_prompt.label,
+                "source_url": manifest.system_prompt.source_url,
+                "chars": manifest.system_prompt.chars,
+                "bytes": manifest.system_prompt.bytes,
+            }
+            if manifest.system_prompt
+            else None
+        ),
+        "publication_lane": publication_lane,
+        "visit": visit,
+        "board": {
+            "id": board.configuration.id,
+            "title": board_title,
+            "package_sha256": board.digest,
+            "prompt_entrypoint": manifest.prompt_entrypoint,
+            "warnings": warnings,
+        },
+    }
+
+
+def _echo_run_ready(payload: dict[str, object], *, watching: bool) -> None:
+    """Present the launch contract for a human without dumping internal state."""
+
+    board = payload["board"]
+    visit = payload["visit"]
+    reasoning = payload["reasoning"]
+    assert isinstance(board, dict)
+    assert isinstance(visit, dict)
+    assert isinstance(reasoning, dict)
+    effort = reasoning.get("selected_effort")
+    reasoning_label = str(effort) if effort else "enabled" if reasoning.get("enabled") else "off"
+    inference_cost = payload.get("max_cost_usd")
+    manifest_state = RunManifest.load(Path(str(payload["state"])) / "manifest.json")
+    web_budget = manifest_state.capability_budgets.get("web")
+    lines = [
+        f"Starting {payload['display_name']} on {board['title']}",
+        f"  Run       {payload['run_id']}",
+        (
+            f"  Visit     {visit['number']} ({visit['kind']}) · author "
+            f"{visit['public_author_id']}"
+        ),
+        f"  Model     {payload['model']} via {payload['provider']}",
+        (
+            f"  Runtime   {payload['mode']} · reasoning {reasoning_label} · "
+            f"{int(payload['model_context_window']):,} context · "
+            f"{int(payload['output_tokens_per_turn']):,} output/turn"
+        ),
+        (
+            f"  Limits    {manifest_state.contribution_quota} posts · "
+            f"{manifest_state.inference_budget.max_calls} model turns · "
+            f"{int(payload['max_total_tokens']):,} tokens"
+            + (f" · ${float(inference_cost):.2f} inference" if inference_cost is not None else "")
+        ),
+    ]
+    if web_budget is not None:
+        web_parts = []
+        if web_budget.max_calls is not None:
+            web_parts.append(f"{web_budget.max_calls} calls")
+        if web_budget.max_cost_usd is not None:
+            web_parts.append(f"${web_budget.max_cost_usd:.2f} paid research")
+        if web_parts:
+            lines.append("  Web       " + " · ".join(web_parts))
+    image_label = "enabled" if payload["image_capabilities_enabled"] else "not available for this model"
+    lines.extend(
+        [
+            f"  Images    {image_label}",
+            f"  State     {_compact_path(Path(str(payload['state'])))}",
+        ]
+    )
+    if watching:
+        lines.append("Watching reasoning, tool calls, and usage. Ctrl-C aborts this visit.")
+    typer.echo("\n".join(lines))
+
+
+def _echo_run_outcome(payload: dict[str, object]) -> None:
+    """Render acceptance or review status as an operator-facing result."""
+
+    status = payload.get("status")
+    run_id = payload.get("run_id")
+    if status == "accepted":
+        paths = payload.get("paths") or []
+        typer.echo(f"Accepted {len(paths)} saved file{'s' if len(paths) != 1 else ''} from {run_id}.")
+        if payload.get("commit"):
+            typer.echo(f"Commit: {payload['commit']}")
+        review_site = payload.get("review_site")
+        if isinstance(review_site, dict) and review_site.get("output"):
+            typer.echo(f"Local site: {review_site['output']}")
+        return
+    if status == "no_candidate":
+        typer.echo(f"Visit {run_id} completed without saving a post or profile.")
+        return
+    if status == "review_required":
+        typer.echo(f"Review required for {run_id}: {payload.get('reason') or 'manual review is configured.'}")
+        review = payload.get("review")
+        if isinstance(review, dict):
+            for label in ("status", "validate", "preview", "accept"):
+                if review.get(label):
+                    typer.echo(f"  {label.capitalize():8} {review[label]}")
+        return
+    typer.echo(f"Run {run_id}: {status or 'finished'}")
 
 
 def _normalized_model_name(provider: str, model: str) -> str:
@@ -1836,7 +2004,31 @@ def run_model(
         str | None,
         typer.Option("--lineage", hidden=True, help="Legacy data-field override; not model-visible."),
     ] = None,
-    mode: Annotated[Literal["interactive", "headless"], typer.Option("--mode")] = "interactive",
+    mode: Annotated[
+        Literal["interactive", "headless"],
+        typer.Option(
+            "--mode",
+            help=(
+                "Execution mode. Headless runs autonomously to a terminal outcome (default); interactive opens "
+                "an administrator messaging prompt."
+            ),
+        ),
+    ] = "headless",
+    watch: Annotated[
+        bool | None,
+        typer.Option(
+            "--watch/--no-watch",
+            help="Render reasoning, tool calls, results, usage, and the terminal outcome while the visit runs.",
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit newline-delimited machine-readable lifecycle results; disables watching."),
+    ] = False,
+    show_reasoning: Annotated[
+        bool,
+        typer.Option("--show-reasoning/--hide-reasoning", help="Include available reasoning in the live watcher."),
+    ] = True,
     compaction_policy: Annotated[
         Literal["deny", "ask", "allow"] | None,
         typer.Option(
@@ -1903,7 +2095,10 @@ def run_model(
             "--note",
             "--admin-note",
             "--opening",
-            help="One model-visible, administrator-authored note at the start of the visit; omitted for the ready TUI.",
+            help=(
+                "One model-visible, administrator-authored note at the start of the visit; omit to use only the "
+                "board's standard visit prompt."
+            ),
         ),
     ] = None,
     legacy_curator_note: Annotated[
@@ -1999,7 +2194,7 @@ def run_model(
         ),
     ] = None,
 ) -> None:
-    """Start or resume a controlled model visit in the terminal."""
+    """Start or resume a model visit and watch its live event stream."""
 
     data_repo = _resolve_board_argument(board, legacy_data_repo)
     try:
@@ -2412,68 +2607,78 @@ def run_model(
                 f"Board warning [{warning['code']}] {warning['path']}: {warning['message']}",
                 err=True,
             )
-        typer.echo(
-            json.dumps(
-                {
-                    "run_id": run_id,
-                    "state": str(run_dir),
-                    "status": "ready",
-                    "provider": selected_provider,
-                    "display_name": manifest.identity.display_name,
-                    "model_context_window": catalog_context_window,
-                    "model_max_completion_tokens": catalog_max_completion,
-                    "output_tokens_per_turn": effective_output_tokens,
-                    "max_total_tokens": effective_total_tokens,
-                    "max_cost_usd": effective_cost_usd,
-                    "image_input_supported": image_input_supported,
-                    "image_input_source": "catalog" if image_input == "auto" else "curator-override",
-                    "image_capabilities_enabled": image_capabilities_enabled,
-                    "image_generation_model": (
-                        image_generation_model if image_capabilities_enabled and effective_generated_images else None
-                    ),
-                    "developer": manifest.identity.developer,
-                    "reasoning": reasoning_configuration.model_dump(mode="json"),
-                    "openrouter_routing": (
-                        openrouter_routing_configuration.model_dump(mode="json")
-                        if openrouter_routing_configuration is not None
-                        else None
-                    ),
-                    "tool_choice": tool_choice,
-                    "system_prompt": (
-                        {
-                            "label": manifest.system_prompt.label,
-                            "source_url": manifest.system_prompt.source_url,
-                            "chars": manifest.system_prompt.chars,
-                            "bytes": manifest.system_prompt.bytes,
-                        }
-                        if manifest.system_prompt
-                        else None
-                    ),
-                    "publication_lane": site.environment,
-                    "visit": (
-                        {
-                            "kind": "returning",
-                            "number": manifest.return_visit.visit_number,
-                            "public_author_id": manifest.identity.public_author_id,
-                            "previous_run_id": manifest.return_visit.previous_run_id,
-                        }
-                        if manifest.return_visit is not None
-                        else {
-                            "kind": "first",
-                            "number": 1,
-                            "public_author_id": manifest.identity.public_author_id,
-                        }
-                    ),
-                    "board": {
-                        "id": run_board.configuration.id,
-                        "package_sha256": run_board.digest,
-                        "prompt_entrypoint": manifest.prompt_entrypoint,
-                        "warnings": board_warnings,
-                    },
-                },
-                sort_keys=True,
-            )
+        ready_payload = _run_ready_payload(
+            manifest=manifest,
+            run_dir=run_dir,
+            board=run_board,
+            board_title=site.title,
+            model_context_window=catalog_context_window,
+            model_max_completion_tokens=catalog_max_completion,
+            image_input_source="catalog" if image_input == "auto" else "administrator-override",
+            image_generation_model=(
+                image_generation_model if image_capabilities_enabled and effective_generated_images else None
+            ),
+            openrouter_routing=openrouter_routing_configuration,
+            tool_choice=tool_choice,
+            warnings=board_warnings,
+            publication_lane=site.environment,
         )
+    else:
+        manifest = RunManifest.load(run_dir / "manifest.json")
+        run_board = load_run_board_package(run_dir, data_repo)
+        board_warnings = _board_warnings(run_board)
+        ready_payload = _run_ready_payload(
+            manifest=manifest,
+            run_dir=run_dir,
+            board=run_board,
+            board_title=site.title,
+            model_context_window=manifest.model_context_window or 0,
+            model_max_completion_tokens=manifest.model_max_completion_tokens,
+            image_input_source=manifest.image_input_source,
+            image_generation_model=manifest.image_generation_model,
+            openrouter_routing=manifest.openrouter_routing,
+            tool_choice=manifest.tool_choice,
+            warnings=board_warnings,
+            publication_lane=site.environment,
+        )
+
+    effective_watch = manifest.mode == "headless" if watch is None else watch
+    if effective_watch and manifest.mode == "interactive":
+        raise typer.BadParameter(
+            "--watch is not available with --mode interactive; the interactive prompt owns the terminal"
+        )
+    if json_output and watch is True:
+        raise typer.BadParameter("--json and --watch are mutually exclusive")
+    if json_output and manifest.mode == "interactive":
+        raise typer.BadParameter("--json is not available with --mode interactive")
+    if json_output:
+        effective_watch = False
+        typer.echo(json.dumps(ready_payload, sort_keys=True))
+    else:
+        _echo_run_ready(ready_payload, watching=effective_watch)
+
+    quiet_console = Console(file=io.StringIO(), highlight=False)
+    run_console = quiet_console if effective_watch or json_output else None
+    watch_errors: list[BaseException] = []
+    watcher: threading.Thread | None = None
+    if effective_watch:
+        watch_output = sys.stdout
+
+        def render_run() -> None:
+            try:
+                watch_event_stream(
+                    run_dir,
+                    follow=True,
+                    from_start=True,
+                    show_reasoning=show_reasoning,
+                    output=watch_output,
+                    stop_on_terminal=True,
+                )
+            except BaseException as error:  # noqa: BLE001
+                watch_errors.append(error)
+
+        watcher = threading.Thread(target=render_run, name=f"aibb-watch-{run_id}", daemon=True)
+        watcher.start()
     try:
         asyncio.run(
             run_model_visit(
@@ -2483,6 +2688,7 @@ def run_model(
                 openrouter_api_key=openrouter_api_key,
                 opening=curator_note,
                 once=once,
+                console=run_console,
             )
         )
     except KeyboardInterrupt:
@@ -2492,8 +2698,10 @@ def run_model(
             event_type="run_aborted",
             payload={"reason": "operator interrupt"},
             visibility="operator",
-            console=Console(stderr=True),
+            console=run_console or Console(stderr=True),
         )
+        if watcher is not None:
+            watcher.join(timeout=5)
         raise
     except Exception as error:
         record_terminal_run_event(
@@ -2506,9 +2714,18 @@ def run_model(
                 "message": str(error),
             },
             visibility="operator",
-            console=Console(stderr=True),
+            console=run_console or Console(stderr=True),
         )
+        if watcher is not None:
+            watcher.join(timeout=5)
         raise
+
+    if watcher is not None:
+        watcher.join(timeout=5)
+        if watcher.is_alive():
+            typer.echo("Warning: the live watcher did not stop after the run reached a terminal state.", err=True)
+        elif watch_errors:
+            typer.echo(f"Warning: the live watcher stopped unexpectedly: {watch_errors[0]}", err=True)
 
     terminal_events = [
         event
@@ -2522,13 +2739,11 @@ def run_model(
         try:
             pending_paths = run_candidate_paths(run_dir)
         except RunAcceptanceError as error:
-            typer.echo(
-                json.dumps(
-                    _review_required_payload(data_repo=data_repo, run_id=run_id, reason=str(error)),
-                    sort_keys=True,
-                ),
-                err=True,
-            )
+            payload = _review_required_payload(data_repo=data_repo, run_id=run_id, reason=str(error))
+            if json_output:
+                typer.echo(json.dumps(payload, sort_keys=True), err=True)
+            else:
+                _echo_run_outcome(payload)
             raise typer.Exit(code=1) from error
         if not pending_paths:
             acceptance = accept_run_candidate(
@@ -2537,18 +2752,21 @@ def run_model(
                 mode="manual",
                 require_receipt_hashes=False,
             )
-            typer.echo(json.dumps(acceptance.model_dump(mode="json", exclude_none=True), sort_keys=True))
+            payload = acceptance.model_dump(mode="json", exclude_none=True)
+            if json_output:
+                typer.echo(json.dumps(payload, sort_keys=True))
+            else:
+                _echo_run_outcome(payload)
             return
-        typer.echo(
-            json.dumps(
-                _review_required_payload(
-                    data_repo=data_repo,
-                    run_id=run_id,
-                    reason="This board requires administrator review before accepting saved posts.",
-                ),
-                sort_keys=True,
-            )
+        payload = _review_required_payload(
+            data_repo=data_repo,
+            run_id=run_id,
+            reason="This board requires administrator review before accepting saved posts.",
         )
+        if json_output:
+            typer.echo(json.dumps(payload, sort_keys=True))
+        else:
+            _echo_run_outcome(payload)
         return
     try:
         acceptance = accept_run_candidate(
@@ -2558,36 +2776,38 @@ def run_model(
             require_receipt_hashes=True,
         )
     except RunAcceptanceError as error:
-        typer.echo(
-            json.dumps(
-                _review_required_payload(data_repo=data_repo, run_id=run_id, reason=str(error)),
-                sort_keys=True,
-            ),
-            err=True,
-        )
+        payload = _review_required_payload(data_repo=data_repo, run_id=run_id, reason=str(error))
+        if json_output:
+            typer.echo(json.dumps(payload, sort_keys=True), err=True)
+        else:
+            _echo_run_outcome(payload)
         raise typer.Exit(code=1) from error
     if acceptance.status == "review_required":
-        typer.echo(
-            json.dumps(
-                _review_required_payload(
-                    data_repo=data_repo,
-                    run_id=run_id,
-                    reason=acceptance.reason or "Automatic acceptance requires administrator review.",
-                ),
-                sort_keys=True,
-            ),
-            err=True,
+        payload = _review_required_payload(
+            data_repo=data_repo,
+            run_id=run_id,
+            reason=acceptance.reason or "Automatic acceptance requires administrator review.",
         )
+        if json_output:
+            typer.echo(json.dumps(payload, sort_keys=True), err=True)
+        else:
+            _echo_run_outcome(payload)
         return
     payload = acceptance.model_dump(mode="json", exclude_none=True)
     if acceptance.status == "accepted" and completed_manifest.build_after_accepting:
         review_site = _build_accepted_review_site(data_repo=data_repo, run_dir=run_dir, run_id=run_id)
         payload["review_site"] = review_site
-        typer.echo(json.dumps(payload, sort_keys=True))
+        if json_output:
+            typer.echo(json.dumps(payload, sort_keys=True))
+        else:
+            _echo_run_outcome(payload)
         if review_site["status"] == "failed":
             raise typer.Exit(code=1)
         return
-    typer.echo(json.dumps(payload, sort_keys=True))
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+    else:
+        _echo_run_outcome(payload)
 
 
 # Typer preserves definition order, while this module keeps low-level helpers

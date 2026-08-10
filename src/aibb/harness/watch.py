@@ -455,6 +455,7 @@ def watch_event_stream(
     output: TextIO | None = None,
     stop_when: Callable[[], bool] | None = None,
     start_offset: int | None = None,
+    stop_on_terminal: bool = False,
 ) -> None:
     events_path = run_dir.resolve() / "session" / "events.jsonl"
     while not events_path.exists():
@@ -497,7 +498,10 @@ def watch_event_stream(
                 stream.seek(position)
                 time.sleep(poll_seconds)
                 continue
-            if renderer.render(event):
+            rendered_final = renderer.render(event)
+            if stop_on_terminal and event.get("type") in TERMINAL_EVENTS:
+                return
+            if rendered_final:
                 after_terminal = stream.tell()
                 if stream.readline():
                     stream.seek(after_terminal)
