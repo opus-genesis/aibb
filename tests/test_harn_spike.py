@@ -12,6 +12,7 @@ from harn_ai.providers.faux import faux_assistant_message, faux_tool_call, regis
 from harn_ai.stream import stream_simple
 from harn_ai.types import TextContent
 from mcp import StdioServerParameters
+from mcp import types as mcp_types
 
 from aibb.harness import AibbHarnessEngine
 from aibb.protocol.client import StdioMcpBridge
@@ -180,11 +181,92 @@ async def test_curator_can_queue_steering_while_tool_is_running() -> None:
         release.set()
         await asyncio.wait_for(run, timeout=2)
 
-        assert engine.agent.toolExecution == "sequential"
+        assert engine.agent.toolExecution == "parallel"
         assert registration.state["callCount"] == 2
         assert text_from_last_message(engine) == "I received the curator's note."
         visible_text = json.dumps(captured_contexts[-1]["messages"])
         assert "[Administrator]\\nPlease also consider the provenance." in visible_text
+    finally:
+        registration.unregister()
+
+
+@pytest.mark.asyncio
+async def test_independent_mcp_research_calls_overlap_in_one_model_turn() -> None:
+    registration = register_faux_provider({"api": "aibb-parallel-research-faux", "provider": "aibb-faux"})
+    registration.set_responses(
+        [
+            faux_assistant_message(
+                [
+                    faux_tool_call("research_web", {"query": "first question"}, {"id": "research-first"}),
+                    faux_tool_call("research_web", {"query": "second question"}, {"id": "research-second"}),
+                ],
+                {"stopReason": "toolUse"},
+            ),
+            faux_assistant_message("Both research memos arrived.", {"stopReason": "stop"}),
+        ]
+    )
+    both_started = asyncio.Event()
+    started: list[str] = []
+
+    class FakeSession:
+        async def list_tools(self) -> Any:
+            return type(
+                "ListedTools",
+                (),
+                {
+                    "tools": [
+                        mcp_types.Tool(
+                            name="research_web",
+                            title="Research the web",
+                            description="Return a cited research memo.",
+                            inputSchema={
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                                "additionalProperties": False,
+                            },
+                        ),
+                        mcp_types.Tool(
+                            name="save_post",
+                            title="Save post",
+                            description="Save one post.",
+                            inputSchema={"type": "object", "properties": {}, "additionalProperties": False},
+                        ),
+                    ]
+                },
+            )()
+
+        async def call_tool(self, name: str, arguments: dict[str, object]) -> mcp_types.CallToolResult:
+            assert name == "research_web"
+            started.append(str(arguments["query"]))
+            if len(started) == 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), timeout=1)
+            return mcp_types.CallToolResult(
+                content=[mcp_types.TextContent(type="text", text=f"memo for {arguments['query']}")],
+                structuredContent={"query": arguments["query"]},
+            )
+
+    bridge = StdioMcpBridge(StdioServerParameters(command="unused"))
+    bridge._session = FakeSession()  # type: ignore[assignment]
+
+    try:
+        tools = await bridge.agent_tools()
+        assert {tool.name: tool.executionMode for tool in tools} == {
+            "research_web": "parallel",
+            "save_post": "sequential",
+        }
+        engine = AibbHarnessEngine(
+            model=registration.models[0],
+            system_prompt=SYSTEM_PROMPT,
+            tools=tools,
+            stream_fn=lambda model, context, options: stream_simple(model, context, options),
+        )
+
+        await asyncio.wait_for(engine.send_curator_message("Research both questions."), timeout=2)
+
+        assert started == ["first question", "second question"]
+        assert text_from_last_message(engine) == "Both research memos arrived."
     finally:
         registration.unregister()
 

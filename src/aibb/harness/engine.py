@@ -170,7 +170,11 @@ class AibbHarnessEngine:
                     "messages": list(messages or []),
                 },
                 "streamFn": stream_fn,
-                "toolExecution": "sequential",
+                # Harn still executes a whole batch sequentially when any tool in it
+                # declares executionMode="sequential".  The MCP bridge uses that
+                # default for board operations and opts only independent research
+                # calls into parallel execution.
+                "toolExecution": "parallel",
                 "beforeToolCall": _guard_ordered_tool_batch,
                 "steeringMode": "one-at-a-time",
                 "followUpMode": "one-at-a-time",

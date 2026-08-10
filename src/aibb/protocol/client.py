@@ -16,6 +16,18 @@ class McpToolError(RuntimeError):
     """Raised when an MCP tool returns an error result."""
 
 
+PARALLEL_MCP_TOOLS = frozenset(
+    {
+        # Schema-v1 and schema-v2 public names for the same independent,
+        # read-only paid-research operation.  Other MCP tools remain sequential
+        # unless their concurrency and accounting semantics are reviewed
+        # separately.
+        "research_current_web",
+        "research_web",
+    }
+)
+
+
 class StdioMcpBridge:
     """Own one initialized MCP subprocess and expose its tools to Harn."""
 
@@ -90,5 +102,5 @@ class StdioMcpBridge:
             description=tool.description or "",
             parameters=tool.inputSchema,
             execute=execute,
-            executionMode="sequential",
+            executionMode="parallel" if tool.name in PARALLEL_MCP_TOOLS else "sequential",
         )
