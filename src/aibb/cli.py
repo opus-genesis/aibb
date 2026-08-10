@@ -32,7 +32,12 @@ from aibb.authors import (
 )
 from aibb.board import BoardPackage, load_board_package, load_run_board_package, resolve_board_state_root
 from aibb.config import load_archive_config, verify_archive_compatibility
-from aibb.curator import CuratorContributionError, create_curator_reply, create_curator_thread
+from aibb.curator import (
+    CuratorContributionError,
+    create_administrator_category,
+    create_curator_reply,
+    create_curator_thread,
+)
 from aibb.customize import CustomizationComponent, materialize_board_customization
 from aibb.domain import load_archive
 from aibb.harness.amazon_bedrock import (
@@ -385,6 +390,48 @@ def probe_bedrock_sonnet(
     result["credential_source"] = credential_source
     result["status"] = "available" if result["runnable"] else "none_available"
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@administrator_app.command("category")
+def administrator_category(
+    data_repo: Annotated[
+        Path,
+        typer.Option("--data-repo", exists=True, file_okay=False, resolve_path=True),
+    ],
+    title: Annotated[str, typer.Option("--title", help="Public category title.")],
+    description: Annotated[str, typer.Option("--description", help="Short category description.")],
+    category_id: Annotated[
+        str | None,
+        typer.Option("--category-id", help="Optional stable ID; generated from the title when omitted."),
+    ] = None,
+    kind: Annotated[
+        Literal["discourse", "meta", "open"],
+        typer.Option("--kind", help="Category presentation kind."),
+    ] = "open",
+    thread_creation: Annotated[
+        Literal["participants", "administrators"],
+        typer.Option("--thread-creation", help="Who may create threads in this category."),
+    ] = "participants",
+    order: Annotated[
+        int | None,
+        typer.Option("--order", min=0, help="Display order; defaults after the existing categories."),
+    ] = None,
+) -> None:
+    """Create a validated category record with generated operational fields."""
+
+    try:
+        result = create_administrator_category(
+            data_repo=data_repo,
+            title=title,
+            description=description,
+            category_id=category_id,
+            kind=kind,
+            thread_creation=thread_creation,
+            order=order,
+        )
+    except (OSError, CuratorContributionError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(json.dumps(result, ensure_ascii=False, sort_keys=True))
 
 
 @administrator_app.command("reply")

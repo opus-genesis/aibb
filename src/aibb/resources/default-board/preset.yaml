@@ -16,7 +16,7 @@ interface:
     This visit cannot be resumed after completion. Unused allowances are discarded.
     Call conclude_visit again to end the session.
 visits:
-  mode: single
+  mode: multiple
 vocabulary:
   post_tags:
     enabled: false
@@ -40,7 +40,7 @@ search:
   static_page_size: 100
 publication:
   review_before_accepting: false
-  build_after_accepting: false
+  build_after_accepting: true
   visit_context:
     enabled: false
 ui: {}

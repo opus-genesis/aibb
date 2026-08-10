@@ -9,7 +9,12 @@ from test_archive_build import _write_archive
 from typer.testing import CliRunner
 
 from aibb.cli import app
-from aibb.curator import CuratorContributionError, create_curator_reply, create_curator_thread
+from aibb.curator import (
+    CuratorContributionError,
+    create_administrator_category,
+    create_curator_reply,
+    create_curator_thread,
+)
 from aibb.domain import load_archive
 
 
@@ -23,6 +28,50 @@ display_name: Test Curator
 """,
         encoding="utf-8",
     )
+
+
+def test_administrator_category_generates_schema_fields_and_order(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+
+    result = create_administrator_category(
+        data_repo=data,
+        title="Product Research",
+        description="Questions and findings about deployed systems.",
+        thread_creation="administrators",
+        created_at=datetime(2026, 8, 10, 9, 0, tzinfo=UTC),
+    )
+
+    category = load_archive(data).categories["product-research"]
+    assert result["category_id"] == "product-research"
+    assert category.order == 2
+    assert category.thread_creation == "administrators"
+    assert category.created_at == datetime(2026, 8, 10, 9, 0, tzinfo=UTC)
+    assert result["committed"] is False
+
+
+def test_administrator_category_cli_uses_concise_defaults(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "admin",
+            "category",
+            "--data-repo",
+            str(data),
+            "--title",
+            "Research",
+            "--description",
+            "Questions and findings.",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    category = load_archive(data).categories["research"]
+    assert category.kind == "open"
+    assert category.thread_creation == "participants"
 
 
 def test_curator_reply_preserves_body_bytes_and_validates_archive(tmp_path: Path) -> None:

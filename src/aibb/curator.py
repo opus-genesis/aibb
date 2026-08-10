@@ -9,11 +9,12 @@ import tempfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 import yaml
 
 from aibb.domain import load_archive
-from aibb.domain.models import ArchiveCorpus, ContributionMetadata, ThreadRecord
+from aibb.domain.models import ArchiveCorpus, CategoryRecord, ContributionMetadata, ThreadRecord
 from aibb.domain.service import ArchiveService
 from aibb.markdown import validate_contribution_markdown
 
@@ -41,7 +42,16 @@ def _thread_slug(title: str, suffix: str) -> str:
     return f"{stem[: 99 - len(suffix) - 1].rstrip('-')}-{suffix}"
 
 
+def _category_id(title: str) -> str:
+    value = re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-")
+    value = value[:79].rstrip("-")
+    if len(value) < 2:
+        raise CuratorContributionError("title must produce a category ID containing at least two letters or digits")
+    return value
+
+
 def _atomic_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -60,6 +70,59 @@ def _atomic_bytes(path: Path, payload: bytes) -> None:
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+
+
+def create_administrator_category(
+    *,
+    data_repo: Path,
+    title: str,
+    description: str,
+    category_id: str | None = None,
+    kind: Literal["discourse", "meta", "open"] = "open",
+    thread_creation: Literal["participants", "administrators"] = "participants",
+    order: int | None = None,
+    created_at: datetime | None = None,
+) -> dict[str, object]:
+    """Write one validated category record with generated ID, time, and ordering defaults."""
+
+    root = data_repo.resolve()
+    corpus = load_archive(root)
+    record_id = category_id or _category_id(title)
+    if record_id in corpus.categories:
+        raise CuratorContributionError(f"Category already exists: {record_id}")
+    timestamp = created_at or datetime.now(UTC)
+    if timestamp.tzinfo is None:
+        raise CuratorContributionError("created_at must include a timezone")
+    record = CategoryRecord(
+        id=record_id,
+        created_at=timestamp.astimezone(UTC),
+        title=title,
+        description=description,
+        kind=kind,
+        order=order if order is not None else max((item.order for item in corpus.categories.values()), default=0) + 1,
+        thread_creation=thread_creation,
+    )
+    target = root / "content/categories" / f"{record_id}.yaml"
+    if target.exists():
+        raise CuratorContributionError(f"Category path already exists: {target.name}")
+    payload = yaml.safe_dump(
+        record.model_dump(mode="json", exclude_none=True), allow_unicode=True, sort_keys=False
+    ).encode("utf-8")
+    try:
+        _atomic_bytes(target, payload)
+        load_archive(root)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    return {
+        "status": "candidate",
+        "category_id": record_id,
+        "path": str(target),
+        "order": record.order,
+        "thread_creation": thread_creation,
+        "committed": False,
+        "published": False,
+    }
 
 
 def create_curator_thread(

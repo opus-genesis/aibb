@@ -59,13 +59,15 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert corpus.site.base_url == "https://room.example/"
     assert corpus.site.about_markdown.startswith("A patient exchange across model generations.\n\n")
     assert set(corpus.categories) == {"general"}
+    assert set(corpus.authors) == {"board-administrator"}
+    assert corpus.authors["board-administrator"].display_name == "Example Curator"
     assert corpus.categories["general"].title == "General"
     assert board.configuration.schema_version == 2
     assert board.configuration.preset == STANDARD_BOARD_PRESET
     assert board.source == destination / "board/aibb-board.yaml"
     assert board.configuration.interface.tool_names == "generic"
     assert board.configuration.interface.generic_tool_version == "v2"
-    assert board.configuration.visits.mode == "single"
+    assert board.configuration.visits.mode == "multiple"
     assert board.configuration.search.cloudflare_worker is False
     assert board.warnings == ()
     assert board.prompt_package is not None
@@ -86,9 +88,9 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
             },
             "additional_actions": {"profile": "available"},
             "visit_lifecycle": {
-                "mode": "single",
-                "completion_is_irreversible": True,
-                "returning_visits_allowed": False,
+                "mode": "multiple",
+                "completion_is_irreversible": False,
+                "returning_visits_allowed": True,
             },
         }
     )
@@ -101,8 +103,8 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert "- new threads: 1" in prompt.text
     assert "- posts per thread: 1" in prompt.text
     assert "did not detect visual input capability" in prompt.text
-    assert "This board uses single-visit mode" in prompt.text
-    assert "this author record cannot return later" in normalized_prompt
+    assert "This board allows return visits" in prompt.text
+    assert "fresh allowances provided on any later visit" in normalized_prompt
     assert "automatically close for new replies after" in normalized_prompt
     assert "24 posts" in normalized_prompt
     assert "Thread tags are enabled" not in prompt.text
@@ -140,9 +142,9 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
             },
             "additional_actions": {},
             "visit_lifecycle": {
-                "mode": "single",
-                "completion_is_irreversible": True,
-                "returning_visits_allowed": False,
+                "mode": "multiple",
+                "completion_is_irreversible": False,
+                "returning_visits_allowed": True,
             },
             "vocabulary": {
                 "thread_tags": {"free_form": True, "values_text": ""},
@@ -166,12 +168,13 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
         "README.md",
         "aibb.toml",
         "board/aibb-board.yaml",
+        "content/authors/board-administrator.yaml",
         "content/categories/general.yaml",
         "content/site.yaml",
     }
     assert board.configuration.publication.visit_context.enabled is False
     assert board.configuration.publication.review_before_accepting is False
-    assert board.configuration.publication.build_after_accepting is False
+    assert board.configuration.publication.build_after_accepting is True
     assert not (output / "visit-context").exists()
     assert 'href="/visit-context/"' not in (output / "about/index.html").read_text()
 
@@ -210,6 +213,35 @@ def test_generic_board_uses_destination_as_its_private_state_namespace(tmp_path:
     assert result.board_id == "research-room"
     assert load_archive(destination).site.title == "AIBB"
     assert load_board_package(destination).configuration.id == "research-room"
+
+
+def test_new_board_is_ready_for_an_administrator_thread(tmp_path: Path) -> None:
+    destination = tmp_path / "discussion-data"
+    create_board(destination=destination, curator_name="Example Administrator")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "admin",
+            "thread",
+            "--data-repo",
+            str(destination),
+            "--category-id",
+            "general",
+            "--title",
+            "Opening question",
+            "--summary",
+            "A question for the board.",
+            "--body-file",
+            "-",
+        ],
+        input="What should we discuss first?\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    corpus = load_archive(destination)
+    assert len(corpus.threads) == 1
+    assert next(iter(corpus.contributions.values())).metadata.author_id == "board-administrator"
 
 
 def test_materialized_defaults_remain_byte_identical_and_are_not_overwritten(tmp_path: Path) -> None:

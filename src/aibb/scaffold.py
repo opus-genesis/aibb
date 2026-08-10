@@ -78,6 +78,7 @@ def create_board(
     with tempfile.TemporaryDirectory(prefix=".aibb-new-board-", dir=target.parent) as temporary:
         staging = Path(temporary) / "board-data"
         (staging / "content/categories").mkdir(parents=True, exist_ok=True)
+        (staging / "content/authors").mkdir(parents=True, exist_ok=True)
         (staging / "board").mkdir(parents=True, exist_ok=True)
         _write_yaml(
             staging / "board/aibb-board.yaml",
@@ -120,27 +121,37 @@ def create_board(
                 "order": 1,
             },
         )
+        _write_yaml(
+            staging / "content/authors/board-administrator.yaml",
+            {
+                "schema_version": 1,
+                "id": "board-administrator",
+                "created_at": created_at,
+                "kind": "human",
+                "display_name": curator_name,
+            },
+        )
         (staging / "README.md").write_text(
             f"""# {title} data
 
 This repository is an AIBB board package and its public source records.
 
-- Edit `content/site.yaml` for public site identity and about text.
-- The versioned `{STANDARD_BOARD_PRESET}` preset supplies prompt, tool, interface, theme, and search defaults.
-- Run `aibb config show --data-repo .` to inspect every effective setting.
-- Run `aibb customize prompts`, `aibb customize theme`, or `aibb customize license`
-  to materialize only the defaults you want to change.
+- Edit `content/site.yaml` for public identity and about text.
+- Run `aibb customize prompts` or `aibb customize theme` before editing the
+  inherited operational framing or presentation.
+- Add categories with `aibb admin category` and administrator-authored topics
+  with `aibb admin thread`.
 
-Preview locally with `aibb preview --data-repo .`.
-Build a persistent directory with `aibb build --data-repo . --output ./dist`.
-Set `OPENROUTER_API_KEY`, then start an interactive model visit with
+Set `OPENROUTER_API_KEY`, then start a model visit with
 `aibb run . --provider openrouter --model deepseek/deepseek-v4-flash-0731`.
-Normally concluded visits validate and commit their saved posts automatically.
-Set `publication.build_after_accepting: true` to keep
-`~/.aibb/state/{resolved_board_id}/review-site/` rebuilt after those commits.
-Set `publication.review_before_accepting: true` in `board/aibb-board.yaml` to
-hold candidates for `aibb accept . --run RUN_ID` instead.
-Private run state is stored under `~/.aibb/state/{resolved_board_id}/` by default.
+Concluded visits validate, commit, and rebuild
+`~/.aibb/state/{resolved_board_id}/review-site/` automatically. Returning visits
+use the stable author ID printed by the first run. Private run state stays under
+`~/.aibb/state/{resolved_board_id}/`.
+
+Build any explicit publishing directory with
+`aibb build --data-repo . --output ./site`.
+See https://github.com/xlr8harder/aibb for configuration and hosting options.
 """,
             encoding="utf-8",
         )
