@@ -70,6 +70,9 @@ ORDERED_SLOWBOARD_TOOLS = frozenset(
     }
 )
 
+PARALLEL_RESEARCH_TOOLS = frozenset({"research_current_web", "research_web"})
+MAX_PARALLEL_RESEARCH_CALLS_PER_TURN = 3
+
 ORDERED_TOOL_BATCH_REJECTION = (
     "This board tool was not executed. Draft, image-staging, profile, and visit-conclusion tools must be "
     "called one at a time so that you can inspect each returned ID or confirmation before choosing the next "
@@ -80,6 +83,10 @@ TOOL_ARGUMENT_COERCION_REJECTION = (
     "This tool was not executed because its arguments did not match the declared schema exactly. "
     "The harness does not silently coerce tool arguments. Review the allowed fields and values, then call it again."
 )
+RESEARCH_TOOL_BATCH_REJECTION = (
+    "This research request was not executed. At most 3 independent research requests may be started from one "
+    "response. Review the admitted results, then make another research request if it is still useful."
+)
 
 
 def _guard_ordered_tool_batch(context: BeforeToolCallContext, _signal: Any) -> BeforeToolCallResult | None:
@@ -87,6 +94,16 @@ def _guard_ordered_tool_batch(context: BeforeToolCallContext, _signal: Any) -> B
 
     if context.toolCall.arguments != context.args:
         return BeforeToolCallResult(block=True, reason=TOOL_ARGUMENT_COERCION_REJECTION)
+
+    if context.toolCall.name in PARALLEL_RESEARCH_TOOLS:
+        research_calls = [
+            block
+            for block in context.assistantMessage.content
+            if block.type == "toolCall" and block.name in PARALLEL_RESEARCH_TOOLS
+        ]
+        admitted_ids = {call.id for call in research_calls[:MAX_PARALLEL_RESEARCH_CALLS_PER_TURN]}
+        if context.toolCall.id not in admitted_ids:
+            return BeforeToolCallResult(block=True, reason=RESEARCH_TOOL_BATCH_REJECTION)
 
     ordered_calls = [
         block

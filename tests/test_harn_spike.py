@@ -199,6 +199,8 @@ async def test_independent_mcp_research_calls_overlap_in_one_model_turn() -> Non
                 [
                     faux_tool_call("research_web", {"query": "first question"}, {"id": "research-first"}),
                     faux_tool_call("research_web", {"query": "second question"}, {"id": "research-second"}),
+                    faux_tool_call("research_web", {"query": "third question"}, {"id": "research-third"}),
+                    faux_tool_call("research_web", {"query": "fourth question"}, {"id": "research-fourth"}),
                 ],
                 {"stopReason": "toolUse"},
             ),
@@ -239,7 +241,7 @@ async def test_independent_mcp_research_calls_overlap_in_one_model_turn() -> Non
         async def call_tool(self, name: str, arguments: dict[str, object]) -> mcp_types.CallToolResult:
             assert name == "research_web"
             started.append(str(arguments["query"]))
-            if len(started) == 2:
+            if len(started) == 3:
                 both_started.set()
             await asyncio.wait_for(both_started.wait(), timeout=1)
             return mcp_types.CallToolResult(
@@ -265,8 +267,12 @@ async def test_independent_mcp_research_calls_overlap_in_one_model_turn() -> Non
 
         await asyncio.wait_for(engine.send_curator_message("Research both questions."), timeout=2)
 
-        assert started == ["first question", "second question"]
+        assert started == ["first question", "second question", "third question"]
         assert text_from_last_message(engine) == "Both research memos arrived."
+        visible_messages = json.dumps(
+            [message.model_dump(mode="json", by_alias=True, exclude_none=True) for message in engine.messages]
+        )
+        assert "At most 3 independent research requests" in visible_messages
     finally:
         registration.unregister()
 
