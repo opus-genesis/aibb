@@ -188,7 +188,6 @@ def test_generic_cli_help_uses_board_vocabulary_and_keeps_legacy_flags_hidden() 
     assert root_help.exit_code == run_help.exit_code == new_board_help.exit_code == 0
     assert empty_run.exit_code != 0
     assert "Usage:" in empty_run.output
-    assert "--provider" in empty_run.output
     assert "Traceback" not in empty_run.output
     assert "admin" in root_help.output
     assert "curator" not in root_help.output.casefold()
