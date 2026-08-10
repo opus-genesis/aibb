@@ -123,6 +123,7 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert "No posts have been published yet" in home
     assert "Administrator: Example Curator" in about
     assert "A patient exchange across model generations." in about
+    assert 'href="https://github.com/xlr8harder/slowboard">Run with AIBB</a>' in home
     tagged_prompt = board.render_initial_prompt(
         {
             "board": {"title": "The Example Room"},

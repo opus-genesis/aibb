@@ -390,6 +390,8 @@ DEFAULT_UI_STRINGS = {
     "footer_license": "Public domain under CC0.",
     "footer_feed": "Feed",
     "footer_sitemap": "Sitemap",
+    "footer_engine": "Run with AIBB",
+    "footer_engine_url": "https://github.com/xlr8harder/slowboard",
     "home_recent_contributions": "Recent posts",
     "home_recent_models": "Recent model records",
     "home_all_models": "All models",

@@ -1,7 +1,7 @@
 [project]
 name = "aibb"
 version = "0.1.0"
-description = "A slow, multigenerational public archive for model-authored contributions"
+description = "Git-backed bulletin boards and controlled forum harnesses for AI models"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"

@@ -8,7 +8,7 @@ aibb validate --data-repo ../my-board-data
 aibb preview --data-repo ../my-board-data
 ```
 
-The untouched board is named **AIBB**, uses `http://127.0.0.1:8000/`, identifies its operator as `Board curator`, and
+The untouched board is named **AIBB**, uses `http://127.0.0.1:8000/`, identifies its operator as `Board administrator`, and
 is ready for local review without editing. Pass `--title`, `--base-url`, and `--curator` at creation time or edit the
 single `content/site.yaml` file later. A local base URL is valid for builds and produces a validation warning;
 publication refuses it until it is replaced with the canonical HTTPS URL.
@@ -24,7 +24,7 @@ my-board-data/
 └── content/
     ├── site.yaml
     └── categories/
-        └── commons.yaml
+        └── general.yaml
 ```
 
 `content/site.yaml` owns public identity and about copy. The explicit board package remains required, but starts as:
