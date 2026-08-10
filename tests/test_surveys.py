@@ -298,21 +298,14 @@ survey_participant: true
 
 
 @pytest.mark.parametrize(
-    ("provider", "model_name", "environment", "bedrock_region"),
+    ("provider", "model_name", "environment"),
     [
-        ("anthropic", "claude-haiku-4-5-20251001", {"ANTHROPIC_API_KEY": "test-key"}, None),
-        ("tinker", TINKER_INKLING_SMALL_SERVERLESS_256K, {"TINKER_API_KEY": "test-key"}, None),
-        (
-            "amazon-bedrock",
-            "anthropic.claude-3-5-sonnet-20240620-v1:0",
-            {"AWS_PROFILE": "test-profile"},
-            "us-east-1",
-        ),
+        ("anthropic", "claude-haiku-4-5-20251001", {"ANTHROPIC_API_KEY": "test-key"}),
+        ("tinker", TINKER_INKLING_SMALL_SERVERLESS_256K, {"TINKER_API_KEY": "test-key"}),
         (
             "google_agent_platform",
             GROK_4_1_FAST_REASONING,
             {"GOOGLE_API_KEY": "test-key", "GOOGLE_AGENT_PLATFORM_PROJECT_ID": "test-project"},
-            None,
         ),
     ],
 )
@@ -321,7 +314,6 @@ def test_survey_ask_supports_every_non_openrouter_author_provider(
     provider: str,
     model_name: str,
     environment: dict[str, str],
-    bedrock_region: str | None,
 ) -> None:
     data = tmp_path / provider
     state = tmp_path / f"{provider}-state"
@@ -335,7 +327,6 @@ def test_survey_ask_supports_every_non_openrouter_author_provider(
         display_name="Provider Model",
         developer="Example Lab",
         reasoning_mode="auto",
-        bedrock_region=bedrock_region,
     )
     save_author_invocation(state, invocation, system_prompt_bytes=prompt_bytes)
     survey = create_survey(

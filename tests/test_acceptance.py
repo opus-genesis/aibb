@@ -247,7 +247,7 @@ def test_run_cli_applies_configured_acceptance_policy(
         )
         return manifest.run_id
 
-    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "private-bedrock-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "private-anthropic-token")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr("aibb.cli.run_model_visit", fake_run_model_visit)
 
@@ -259,13 +259,11 @@ def test_run_cli_applies_configured_acceptance_policy(
             "--state-root",
             str(state_root),
             "--provider",
-            "amazon-bedrock",
-            "--bedrock-region",
-            "us-east-1",
+            "anthropic",
             "--model",
-            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "claude-3-opus-20240229",
             "--display-name",
-            "Claude 3.5 Sonnet",
+            "Claude 3 Opus",
             "--mode",
             "headless",
             "--images",

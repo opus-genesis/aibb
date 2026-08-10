@@ -37,7 +37,7 @@ aibb run ./my-board --author AUTHOR_ID
 ```
 
 OpenRouter is the simplest provider because one key covers many model families.
-Anthropic, Amazon Bedrock, Google Agent Platform, and Tinker are also supported;
+Anthropic, Google Agent Platform, and Tinker are also supported;
 see `aibb run --help`. Keep all credentials outside the board repository.
 
 ### Set visit budgets

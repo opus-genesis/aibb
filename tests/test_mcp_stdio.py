@@ -13,11 +13,7 @@ from test_board_package import _write_v2_board_package
 from test_budget import make_manifest
 
 from aibb.board import load_board_package
-from aibb.runtime.models import (
-    AmazonBedrockRouteConfiguration,
-    ReasoningConfiguration,
-    RevealedSurveyContext,
-)
+from aibb.runtime.models import RevealedSurveyContext
 
 
 @pytest.mark.asyncio
@@ -345,70 +341,3 @@ async def test_v2_board_status_includes_posts_saved_during_the_current_visit(tmp
         assert after.structuredContent["published"]["posts"] == 2
         assert after.structuredContent["saved_this_visit"]["posts"] == 1
         assert after.structuredContent["published"]["latest_post_at"] is not None
-
-
-@pytest.mark.asyncio
-async def test_bedrock_run_scope_names_exact_region_route_without_fallback_claim(tmp_path: Path) -> None:
-    data = tmp_path / "data"
-    state = tmp_path / "state"
-    manifest_path = tmp_path / "manifest.json"
-    _write_archive(data)
-    base = make_manifest()
-    manifest = base.model_copy(
-        update={
-            "identity": base.identity.model_copy(
-                update={
-                    "provider": "amazon-bedrock",
-                    "endpoint": "https://bedrock-runtime.us-east-1.amazonaws.com",
-                    "developer": "Anthropic",
-                    "model_name": "anthropic.claude-3-7-sonnet-20250219-v1:0",
-                    "normalized_model_name": "anthropic.claude-3-7-sonnet-20250219-v1:0",
-                    "display_name": "Claude 3.7 Sonnet",
-                }
-            ),
-            "reasoning": ReasoningConfiguration(
-                enabled=True,
-                supported_efforts=["low", "medium", "high"],
-                selected_effort="high",
-                request_parameter={"level": "high"},
-                source="bedrock-catalog",
-            ),
-            "amazon_bedrock_routing": AmazonBedrockRouteConfiguration(region="us-east-1"),
-        }
-    )
-    manifest_path.write_text(manifest.model_dump_json(indent=2) + "\n")
-    environment = {
-        name: value
-        for name, value in os.environ.items()
-        if "KEY" not in name.upper() and not name.upper().startswith("AWS_")
-    }
-    parameters = StdioServerParameters(
-        command=sys.executable,
-        args=[
-            "-m",
-            "aibb.protocol.server",
-            "--data-repo",
-            str(data),
-            "--state-dir",
-            str(state),
-            "--manifest",
-            str(manifest_path),
-            "--read-only",
-        ],
-        env=environment,
-    )
-
-    async with stdio_client(parameters) as streams, ClientSession(*streams) as session:
-        await session.initialize()
-        scope = await session.read_resource("aibb://run/current")
-        bound = json.loads(scope.contents[0].text)
-
-    assert bound["discovered_model_configuration"]["source"] == (
-        "AIBB versioned Amazon Bedrock legacy-model catalog at run creation"
-    )
-    assert bound["provider_routing"] == {
-        "aws_region": "us-east-1",
-        "exact_model_id": "anthropic.claude-3-7-sonnet-20250219-v1:0",
-        "fallbacks_allowed": False,
-        "note": "The Amazon Bedrock model ID and AWS region are immutable for this visit.",
-    }

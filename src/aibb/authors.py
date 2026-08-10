@@ -149,7 +149,6 @@ def build_author_invocation(
     reasoning_mode: str,
     reasoning: ReasoningConfiguration | None = None,
     openrouter_provider: str | None = None,
-    bedrock_region: str | None = None,
     generation: str | None = None,
     lineage: str | None = None,
     system_prompt_text: str | None = None,
@@ -189,7 +188,6 @@ def build_author_invocation(
         reasoning_mode=reasoning_mode,
         reasoning=reasoning,
         openrouter_provider=openrouter_provider,
-        bedrock_region=bedrock_region,
         system_prompt=prompt,
         source_run_id=source_run_id,
         repeat_reason=repeat_reason,
@@ -254,9 +252,6 @@ def import_author_from_run(
         reasoning=manifest.reasoning,
         openrouter_provider=(
             manifest.openrouter_routing.provider_slug if manifest.openrouter_routing is not None else None
-        ),
-        bedrock_region=(
-            manifest.amazon_bedrock_routing.region if manifest.amazon_bedrock_routing is not None else None
         ),
         system_prompt_text=prompt_text,
         system_prompt_label=prompt_label,

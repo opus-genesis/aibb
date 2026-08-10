@@ -56,7 +56,6 @@ class ReasoningConfiguration(BaseModel):
     request_parameter: dict[str, object] | None = None
     source: Literal[
         "openrouter-catalog",
-        "bedrock-catalog",
         "tinker-catalog",
         "provider-default",
         "curator-override",
@@ -81,15 +80,6 @@ class OpenRouterRoutingConfiguration(BaseModel):
             "allow_fallbacks": self.allow_fallbacks,
             "require_parameters": self.require_parameters,
         }
-
-
-class AmazonBedrockRouteConfiguration(BaseModel):
-    """Immutable AWS region and model route selected for a Bedrock run."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    region: str = Field(pattern=r"^[a-z][a-z0-9-]{2,31}$")
-    allow_fallbacks: Literal[False] = False
 
 
 class SystemPromptConfiguration(BaseModel):
@@ -126,7 +116,7 @@ class AuthorInvocation(BaseModel):
     board_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
     author_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,79}$")
     created_at: datetime
-    provider: Literal["openrouter", "anthropic", "amazon-bedrock", "google_agent_platform", "tinker"]
+    provider: Literal["openrouter", "anthropic", "google_agent_platform", "tinker"]
     model_name: str = Field(min_length=1, max_length=240)
     normalized_model_name: str = Field(min_length=1, max_length=240)
     display_name: str = Field(min_length=1, max_length=160)
@@ -136,7 +126,6 @@ class AuthorInvocation(BaseModel):
     reasoning_mode: Literal["auto", "enabled", "mandatory", "disabled"] = "auto"
     reasoning: ReasoningConfiguration | None = None
     openrouter_provider: str | None = Field(default=None, min_length=1, max_length=120)
-    bedrock_region: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{2,31}$")
     system_prompt: StoredSystemPromptConfiguration | None = None
     source_run_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{3,99}$")
     repeat_reason: str | None = Field(default=None, min_length=1, max_length=1000)
@@ -152,10 +141,6 @@ class AuthorInvocation(BaseModel):
     def route_options_match_provider(self) -> AuthorInvocation:
         if self.openrouter_provider is not None and self.provider != "openrouter":
             raise ValueError("openrouter_provider is only valid for OpenRouter authors")
-        if self.bedrock_region is not None and self.provider != "amazon-bedrock":
-            raise ValueError("bedrock_region is only valid for Amazon Bedrock authors")
-        if self.provider == "amazon-bedrock" and self.bedrock_region is None:
-            raise ValueError("Amazon Bedrock authors require a region")
         return self
 
     def canonical_sha256(self) -> str:
@@ -244,7 +229,6 @@ class RunManifest(BaseModel):
     model_input_modalities: list[str] = Field(default_factory=lambda: ["text"])
     reasoning: ReasoningConfiguration = Field(default_factory=ReasoningConfiguration)
     openrouter_routing: OpenRouterRoutingConfiguration | None = None
-    amazon_bedrock_routing: AmazonBedrockRouteConfiguration | None = None
     system_prompt: SystemPromptConfiguration | None = None
     tool_choice: Literal["auto", "required"] = "auto"
     headless_continuation_version: str = Field(default="v0.3", min_length=1, max_length=80)
@@ -305,10 +289,6 @@ class RunManifest(BaseModel):
             raise ValueError("compaction soft threshold must be below hard threshold")
         if self.openrouter_routing is not None and self.identity.provider != "openrouter":
             raise ValueError("openrouter_routing is only valid for OpenRouter runs")
-        if self.amazon_bedrock_routing is not None and self.identity.provider != "amazon-bedrock":
-            raise ValueError("amazon_bedrock_routing is only valid for Amazon Bedrock runs")
-        if self.identity.provider == "amazon-bedrock" and self.amazon_bedrock_routing is None:
-            raise ValueError("Amazon Bedrock runs require an immutable region")
         legacy_context = (self.orientation_version, self.notice_version, self.policy_version)
         if self.prompt_entrypoint is None and not all(legacy_context):
             raise ValueError("a run requires either a prompt entrypoint or all legacy framing versions")

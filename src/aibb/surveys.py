@@ -25,12 +25,6 @@ from aibb.authors import load_author_invocation, load_author_system_prompt, save
 from aibb.board import load_board_package
 from aibb.domain import load_archive
 from aibb.domain.models import AuthorRecord, ContributionMetadata, ThreadRecord
-from aibb.harness.amazon_bedrock import (
-    AmazonBedrockAdapter,
-    amazon_bedrock_model,
-    bedrock_credential_source,
-    bedrock_endpoint,
-)
 from aibb.harness.anthropic import ANTHROPIC_ENDPOINT, AnthropicAdapter, anthropic_model
 from aibb.harness.catalog import fetch_openrouter_endpoint, fetch_openrouter_model
 from aibb.harness.engine import AibbHarnessEngine
@@ -45,7 +39,6 @@ from aibb.harness.tinker import TINKER_ANTHROPIC_ENDPOINT, TinkerAdapter, tinker
 from aibb.markdown import validate_contribution_markdown
 from aibb.runtime import BudgetLedger, RunManifest
 from aibb.runtime.models import (
-    AmazonBedrockRouteConfiguration,
     AuthorInvocation,
     BoundModelIdentity,
     BudgetLimits,
@@ -112,7 +105,6 @@ class SurveyProviderResolution:
     prompt_price_per_token: float
     completion_price_per_token: float
     openrouter_routing: OpenRouterRoutingConfiguration | None = None
-    amazon_bedrock_routing: AmazonBedrockRouteConfiguration | None = None
     output_token_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
 
 
@@ -245,12 +237,6 @@ def _provider_api_key(
         if not value:
             raise SurveyError(f"{key_name} is not set")
         return value
-    if invocation.provider == "amazon-bedrock":
-        if bedrock_credential_source(dict(environment)) is None:
-            raise SurveyError(
-                "Configure AWS_BEARER_TOKEN_BEDROCK, AWS_PROFILE, or another supported AWS role credential first"
-            )
-        return environment.get("AWS_BEARER_TOKEN_BEDROCK")
     raise SurveyError(f"Unsupported survey inference provider: {invocation.provider}")
 
 
@@ -358,41 +344,6 @@ async def _resolve_survey_provider(
             completion_price_per_token=model.cost.output / 1_000_000,
         )
 
-    if invocation.provider == "amazon-bedrock":
-        if invocation.bedrock_region is None:
-            raise SurveyError("Amazon Bedrock authors require an immutable region")
-        model = amazon_bedrock_model(
-            invocation.model_name,
-            region=invocation.bedrock_region,
-            max_tokens=max_output_tokens,
-        )
-        if invocation.reasoning is None:
-            if model.reasoning:
-                if invocation.reasoning_mode == "mandatory":
-                    raise SurveyError("Bedrock extended thinking is optional rather than mandatory")
-                enabled = invocation.reasoning_mode != "disabled"
-                reasoning = ReasoningConfiguration(
-                    enabled=enabled,
-                    supported_efforts=["low", "medium", "high"],
-                    selected_effort="high" if enabled else None,
-                    request_parameter={"level": "high"} if enabled else None,
-                    source="bedrock-catalog" if enabled else "curator-override",
-                )
-            else:
-                if invocation.reasoning_mode not in {"auto", "disabled"}:
-                    raise SurveyError(f"{invocation.model_name} does not support Bedrock extended thinking")
-                reasoning = ReasoningConfiguration(enabled=False, source="unavailable")
-        else:
-            reasoning = invocation.reasoning
-        return SurveyProviderResolution(
-            model=model,
-            endpoint=bedrock_endpoint(invocation.bedrock_region),
-            reasoning=reasoning,
-            prompt_price_per_token=model.cost.input / 1_000_000,
-            completion_price_per_token=model.cost.output / 1_000_000,
-            amazon_bedrock_routing=AmazonBedrockRouteConfiguration(region=invocation.bedrock_region),
-        )
-
     if invocation.provider == "google_agent_platform":
         project_id = environment.get("GOOGLE_AGENT_PLATFORM_PROJECT_ID")
         if not project_id:
@@ -468,16 +419,6 @@ def _survey_adapter(
         return TinkerAdapter(
             api_key=api_key,
             reasoning_effort=(resolution.reasoning.selected_effort if resolution.reasoning.enabled else None),
-            **common,
-        )
-    if invocation.provider == "amazon-bedrock":
-        if invocation.bedrock_region is None:
-            raise SurveyError("Amazon Bedrock authors require an immutable region")
-        return AmazonBedrockAdapter(
-            bearer_token=api_key,
-            region=invocation.bedrock_region,
-            endpoint=resolution.endpoint,
-            reasoning_level=(resolution.reasoning.selected_effort if resolution.reasoning.enabled else None),
             **common,
         )
     if invocation.provider == "google_agent_platform":
@@ -587,7 +528,6 @@ async def ask_survey(
         model_input_modalities=sorted(resolution.model.input),
         reasoning=reasoning,
         openrouter_routing=resolution.openrouter_routing,
-        amazon_bedrock_routing=resolution.amazon_bedrock_routing,
         system_prompt=prompt_metadata,
         compaction_policy="deny",
         prompt_price_per_token=resolution.prompt_price_per_token,

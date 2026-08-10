@@ -24,7 +24,6 @@ from rich.panel import Panel
 from aibb.authors import AuthorInvocationError, load_author_invocation
 from aibb.board import load_board_package, load_run_board_package
 from aibb.domain import load_archive
-from aibb.harness.amazon_bedrock import AmazonBedrockAdapter, amazon_bedrock_model
 from aibb.harness.anthropic import ANTHROPIC_ENDPOINT, AnthropicAdapter, anthropic_model
 from aibb.harness.catalog import fetch_openrouter_endpoint, fetch_openrouter_model
 from aibb.harness.compaction import COMPACTION_NOTICE_VERSION, compact_archive_results, estimate_message_tokens
@@ -38,7 +37,6 @@ from aibb.protocol.world import CURRENT_STARTING_POINTS_VERSION, starting_points
 from aibb.runtime import BudgetLedger, RunManifest
 from aibb.runtime.headless import HEADLESS_CONTINUATION_MESSAGES
 from aibb.runtime.models import (
-    AmazonBedrockRouteConfiguration,
     AuthorInvocation,
     BoundModelIdentity,
     BudgetLimits,
@@ -550,7 +548,6 @@ def create_run_manifest(
     model_input_modalities: list[str] | None = None,
     reasoning: Any = None,
     openrouter_routing: OpenRouterRoutingConfiguration | None = None,
-    amazon_bedrock_routing: AmazonBedrockRouteConfiguration | None = None,
     tool_choice: Literal["auto", "required"] = "auto",
     image_input_supported: bool = False,
     image_input_source: Literal["catalog", "curator-override"] = "catalog",
@@ -561,7 +558,7 @@ def create_run_manifest(
     max_image_cost_usd: float = 2.0,
     max_web_calls: int = 40,
     max_web_cost_usd: float = 10.0,
-    provider: Literal["openrouter", "anthropic", "amazon-bedrock", "google_agent_platform", "tinker"] = "openrouter",
+    provider: Literal["openrouter", "anthropic", "google_agent_platform", "tinker"] = "openrouter",
     endpoint: str | None = None,
     system_prompt_text: str | None = None,
     system_prompt_label: str | None = None,
@@ -752,7 +749,6 @@ def create_run_manifest(
         model_input_modalities=model_input_modalities or ["text"],
         reasoning=reasoning or {},
         openrouter_routing=openrouter_routing,
-        amazon_bedrock_routing=amazon_bedrock_routing,
         system_prompt=system_prompt,
         tool_choice=tool_choice,
         headless_continuation_version=board.configuration.interface.headless_continuation_version,
@@ -882,11 +878,6 @@ def _load_author_invocation_snapshot(run_dir: Path, manifest: RunManifest) -> Au
     )
     if invocation.openrouter_provider != manifest_openrouter_provider:
         raise ValueError("Author invocation snapshot OpenRouter route does not match the run manifest")
-    manifest_bedrock_region = (
-        manifest.amazon_bedrock_routing.region if manifest.amazon_bedrock_routing is not None else None
-    )
-    if invocation.bedrock_region != manifest_bedrock_region:
-        raise ValueError("Author invocation snapshot Bedrock route does not match the run manifest")
     if (invocation.system_prompt is None) != (manifest.system_prompt is None):
         raise ValueError("Author invocation snapshot prompt does not match the run manifest")
     if invocation.system_prompt is not None and manifest.system_prompt is not None:
@@ -1268,26 +1259,6 @@ async def run_model_visit(
             max_output_tokens=max_output_tokens,
             tool_choice=manifest.tool_choice,
             reasoning_effort=manifest.reasoning.selected_effort if manifest.reasoning.enabled else None,
-        )
-        catalog_record = model.model_dump(mode="json", by_alias=True, exclude_none=True)
-    elif manifest.identity.provider == "amazon-bedrock":
-        if manifest.amazon_bedrock_routing is None:
-            raise ValueError("Amazon Bedrock run manifest is missing its immutable region")
-        max_output_tokens = manifest.max_output_tokens_per_turn
-        model = amazon_bedrock_model(
-            manifest.identity.model_name,
-            region=manifest.amazon_bedrock_routing.region,
-            max_tokens=max_output_tokens,
-        )
-        adapter = AmazonBedrockAdapter(
-            bearer_token=api_key,
-            region=manifest.amazon_bedrock_routing.region,
-            endpoint=manifest.identity.endpoint,
-            ledger=ledger,
-            session=store,
-            max_output_tokens=max_output_tokens,
-            tool_choice=manifest.tool_choice,
-            reasoning_level=manifest.reasoning.selected_effort if manifest.reasoning.enabled else None,
         )
         catalog_record = model.model_dump(mode="json", by_alias=True, exclude_none=True)
     elif manifest.identity.provider == "google_agent_platform":

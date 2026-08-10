@@ -1468,11 +1468,7 @@ def create_server(
                             else (
                                 "Tinker documented model catalog and live count-token route probe at run creation"
                                 if identity.provider == "tinker"
-                                else (
-                                    f"{archive_title} versioned Amazon Bedrock legacy-model catalog at run creation"
-                                    if identity.provider == "amazon-bedrock"
-                                    else "version-pinned Harn provider catalog at run creation"
-                                )
+                                else "version-pinned Harn provider catalog at run creation"
                             )
                         )
                     ),
@@ -1495,26 +1491,17 @@ def create_server(
                     if state.manifest.openrouter_routing is not None
                     else (
                         {
-                            "aws_region": state.manifest.amazon_bedrock_routing.region,
-                            "exact_model_id": identity.model_name,
-                            "fallbacks_allowed": state.manifest.amazon_bedrock_routing.allow_fallbacks,
-                            "note": "The Amazon Bedrock model ID and AWS region are immutable for this visit.",
+                            "provider_slug": "tinker",
+                            "fallbacks_allowed": False,
+                            "context_variant": "256K serverless inference",
+                            "note": "The Tinker route is pinned for this visit.",
                         }
-                        if state.manifest.amazon_bedrock_routing is not None
-                        else (
-                            {
-                                "provider_slug": "tinker",
-                                "fallbacks_allowed": False,
-                                "context_variant": "256K serverless inference",
-                                "note": "The Tinker route is pinned for this visit.",
-                            }
-                            if identity.provider == "tinker"
-                            else {
-                                "provider_slug": None,
-                                "fallbacks_allowed": True,
-                                "note": "No specific inference backend was pinned for this visit.",
-                            }
-                        )
+                        if identity.provider == "tinker"
+                        else {
+                            "provider_slug": None,
+                            "fallbacks_allowed": True,
+                            "note": "No specific inference backend was pinned for this visit.",
+                        }
                     )
                 ),
                 "today": state.manifest.calendar_date.isoformat(),

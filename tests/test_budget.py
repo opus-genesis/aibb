@@ -8,7 +8,6 @@ import pytest
 from aibb.runtime import BudgetExceededError, BudgetLedger
 from aibb.runtime.budget import Usage
 from aibb.runtime.models import (
-    AmazonBedrockRouteConfiguration,
     BoundModelIdentity,
     BudgetLimits,
     OpenRouterRoutingConfiguration,
@@ -132,26 +131,6 @@ def test_openrouter_provider_pin_is_immutable_and_serialized() -> None:
         "allow_fallbacks": False,
         "require_parameters": True,
     }
-
-
-def test_amazon_bedrock_region_pin_is_immutable_and_provider_scoped() -> None:
-    base = make_manifest()
-    routing = AmazonBedrockRouteConfiguration(region="us-east-1")
-    manifest = base.model_copy(
-        update={
-            "identity": base.identity.model_copy(update={"provider": "amazon-bedrock"}),
-            "amazon_bedrock_routing": routing,
-        }
-    )
-
-    restored = RunManifest.model_validate_json(manifest.model_dump_json())
-
-    assert restored.amazon_bedrock_routing == routing
-    assert restored.amazon_bedrock_routing.allow_fallbacks is False
-    with pytest.raises(ValueError, match="only valid for Amazon Bedrock"):
-        RunManifest.model_validate(
-            base.model_copy(update={"amazon_bedrock_routing": routing}).model_dump()
-        )
 
 
 def test_budget_extension_only_increases_selected_limits_and_preserves_usage(tmp_path: Path) -> None:
