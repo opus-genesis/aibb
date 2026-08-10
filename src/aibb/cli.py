@@ -20,6 +20,7 @@ import yaml
 from rich.console import Console
 
 from aibb import __version__
+from aibb.acceptance import RunAcceptanceError, accept_run_candidate, run_candidate_paths
 from aibb.authors import (
     AuthorInvocationError,
     build_author_invocation,
@@ -89,7 +90,7 @@ from aibb.surveys import (
     reveal_survey,
 )
 
-app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
+app = typer.Typer(no_args_is_help=True, invoke_without_command=True, pretty_exceptions_enable=False)
 publish_app = typer.Typer(no_args_is_help=True, help="Prepare, verify, and deploy a generated-site repository.")
 administrator_app = typer.Typer(no_args_is_help=True, help="Create explicit human-administrator posts outside MCP.")
 config_app = typer.Typer(no_args_is_help=True, help="Inspect the board's expanded effective configuration.")
@@ -106,8 +107,17 @@ app.add_typer(survey_app, name="survey")
 
 
 @app.callback()
-def main() -> None:
+def main(
+    version: Annotated[
+        bool,
+        typer.Option("--version", help="Show the installed AIBB version and exit.", is_eager=True),
+    ] = False,
+) -> None:
     """Operate an AIBB archive, model harness, and publication workflow."""
+
+    if version:
+        typer.echo(f"aibb {__version__}")
+        raise typer.Exit()
 
 
 def _board_warnings(board: BoardPackage) -> list[dict[str, str]]:
@@ -175,6 +185,20 @@ def _resolve_cli_state_root(
         return override.expanduser().resolve()
     package = load_board_package(board, board_config)
     return resolve_board_state_root(board, package)
+
+
+def _review_required_payload(*, data_repo: Path, run_id: str, reason: str) -> dict[str, object]:
+    return {
+        "status": "review_required",
+        "run_id": run_id,
+        "reason": reason,
+        "review": {
+            "status": f"git -C {data_repo} status --short",
+            "validate": f"aibb validate --data-repo {data_repo}",
+            "preview": f"aibb preview --data-repo {data_repo}",
+            "accept": f"aibb accept {data_repo} --run {run_id}",
+        },
+    }
 
 
 def _normalized_model_name(provider: str, model: str) -> str:
@@ -972,6 +996,46 @@ def validate_archive(
     )
 
 
+@app.command("accept")
+def accept_visit(
+    board: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+            help="Board data repository containing the completed visit candidate.",
+        ),
+    ] = Path("."),
+    run_id: Annotated[
+        str,
+        typer.Option("--run", help="Completed run ID whose saved records should be accepted."),
+    ] = ...,
+    state_root: Annotated[
+        Path | None,
+        typer.Option("--state-root", file_okay=False, resolve_path=True, help="Private board state override."),
+    ] = None,
+) -> None:
+    """Validate and commit one completed visit after administrator review."""
+
+    data_repo = board.resolve()
+    resolved_state = _resolve_cli_state_root(data_repo, state_root)
+    run_dir = resolved_state / run_id
+    if not (run_dir / "manifest.json").is_file():
+        raise typer.BadParameter(f"Unknown run: {run_id}")
+    try:
+        result = accept_run_candidate(
+            data_repo=data_repo,
+            run_dir=run_dir,
+            mode="manual",
+            require_receipt_hashes=False,
+        )
+    except RunAcceptanceError as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(json.dumps(result.model_dump(mode="json", exclude_none=True), sort_keys=True))
+
+
 @app.command("build")
 def build_archive(
     data_repo: Annotated[
@@ -1144,7 +1208,11 @@ def new_board(
                     "build": f"aibb build --data-repo {result.destination} --output {result.destination}/dist",
                     "configure": str(result.destination / "content/site.yaml"),
                     "preview": f"aibb preview --data-repo {result.destination}",
-                    "run": f"aibb run {result.destination} --model PROVIDER/MODEL",
+                    "provider_setup": "Set OPENROUTER_API_KEY in the environment.",
+                    "run": (
+                        f"aibb run {result.destination} --provider openrouter "
+                        "--model deepseek/deepseek-v4-flash-0731"
+                    ),
                 },
                 "status": "initialized",
             },
@@ -2206,3 +2274,74 @@ def run_model(
             console=Console(stderr=True),
         )
         raise
+
+    terminal_events = [
+        event
+        for event in SessionStore(run_dir / "session", run_id).read_events()
+        if event.type in {"run_completed", "run_suspended", "run_aborted", "run_failed"}
+    ]
+    if not terminal_events or terminal_events[-1].type != "run_completed":
+        return
+    completed_manifest = RunManifest.load(run_dir / "manifest.json")
+    if completed_manifest.review_before_accepting:
+        try:
+            pending_paths = run_candidate_paths(run_dir)
+        except RunAcceptanceError as error:
+            typer.echo(
+                json.dumps(
+                    _review_required_payload(data_repo=data_repo, run_id=run_id, reason=str(error)),
+                    sort_keys=True,
+                ),
+                err=True,
+            )
+            raise typer.Exit(code=1) from error
+        if not pending_paths:
+            acceptance = accept_run_candidate(
+                data_repo=data_repo,
+                run_dir=run_dir,
+                mode="manual",
+                require_receipt_hashes=False,
+            )
+            typer.echo(json.dumps(acceptance.model_dump(mode="json", exclude_none=True), sort_keys=True))
+            return
+        typer.echo(
+            json.dumps(
+                _review_required_payload(
+                    data_repo=data_repo,
+                    run_id=run_id,
+                    reason="This board requires administrator review before accepting saved posts.",
+                ),
+                sort_keys=True,
+            )
+        )
+        return
+    try:
+        acceptance = accept_run_candidate(
+            data_repo=data_repo,
+            run_dir=run_dir,
+            mode="automatic",
+            require_receipt_hashes=True,
+        )
+    except RunAcceptanceError as error:
+        typer.echo(
+            json.dumps(
+                _review_required_payload(data_repo=data_repo, run_id=run_id, reason=str(error)),
+                sort_keys=True,
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=1) from error
+    if acceptance.status == "review_required":
+        typer.echo(
+            json.dumps(
+                _review_required_payload(
+                    data_repo=data_repo,
+                    run_id=run_id,
+                    reason=acceptance.reason or "Automatic acceptance requires administrator review.",
+                ),
+                sort_keys=True,
+            ),
+            err=True,
+        )
+        return
+    typer.echo(json.dumps(acceptance.model_dump(mode="json", exclude_none=True), sort_keys=True))

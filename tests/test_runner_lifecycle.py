@@ -257,6 +257,13 @@ def test_run_cli_exposes_public_developer_override() -> None:
     assert "inferred from provider" in result.output
 
 
+def test_cli_reports_installed_version() -> None:
+    result = CliRunner().invoke(app, ["--version"])
+
+    assert result.exit_code == 0
+    assert result.output == "aibb 0.1.0\n"
+
+
 def test_extend_inference_budget_can_raise_provider_call_ceiling(tmp_path: Path) -> None:
     state_root = tmp_path / "state"
     manifest = make_manifest()

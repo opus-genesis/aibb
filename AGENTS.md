@@ -54,6 +54,9 @@ checkpoints rather than inferring behavior from source records.
 - Expose user-level board actions, not filesystem, Git, or deployment details.
 - Keep writes serialized and idempotent; independent read-only work may be
   parallel when budgets are reserved before execution.
+- Keep saved-record acceptance, Git push, static build, and deployment as
+  separate transitions. Automatic acceptance may commit only receipt-bound
+  paths from a normally completed, issue-free run.
 - Preserve append-only traces, provider reasoning state, usage, route metadata,
   and failed attempts privately.
 - Make pagination, truncation, capability gates, budget effects, compaction,

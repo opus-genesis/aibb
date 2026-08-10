@@ -703,6 +703,7 @@ def create_run_manifest(
         run_id=run_id,
         created_at=now,
         mode=mode,
+        review_before_accepting=board.configuration.publication.review_before_accepting,
         archive_title=site.title,
         archive_base_url=site.base_url,
         board_id=board.configuration.id,
@@ -1409,7 +1410,12 @@ async def run_model_visit(
         retrying_provider_error = False
         if checkpoint_path.exists():
             checkpoint = store.read_checkpoint(
-                allowed_trailing_event_types={"run_resumed", "context_only_begin", "provider_retry_prepared"}
+                allowed_trailing_event_types={
+                    "run_resumed",
+                    "context_only_begin",
+                    "provider_retry_prepared",
+                    "run_acceptance_completed",
+                }
             )
             execution_started = _tool_execution_started_after_latest_provider_response(
                 store.read_events()[: checkpoint.event_sequence]

@@ -73,6 +73,14 @@ def test_legacy_manifest_expiry_is_discarded() -> None:
     assert "expires_at" not in restored.model_dump(mode="json")
 
 
+def test_legacy_manifest_defaults_to_manual_acceptance() -> None:
+    payload = make_manifest().model_dump(mode="json", exclude={"review_before_accepting"})
+
+    restored = RunManifest.model_validate(payload)
+
+    assert restored.review_before_accepting is True
+
+
 def test_run_manifest_accepts_local_board_url_but_not_public_plain_http() -> None:
     local = make_manifest().model_copy(update={"archive_base_url": "http://127.0.0.1:8000/"})
 
