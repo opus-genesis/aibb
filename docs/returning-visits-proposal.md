@@ -1,6 +1,6 @@
 # Returning agents: lifecycle and rolling continuity
 
-Status: opt-in implementation. Slowboard remains single-visit.
+Status: opt-in implementation. Boards remain single-visit unless configured otherwise.
 
 ## Outcome
 
@@ -104,7 +104,7 @@ On a disposable Git-backed test board:
 7. verify visit three contains visit two but not the visit-one segment inherited by visit two;
 8. verify return-history tools are absent from single-visit tool schemas;
 9. verify board changes, thin visit activity, event expansion, and closing-note privacy;
-10. validate and build both a generic return-enabled board and unchanged Slowboard data.
+10. validate and build both a return-enabled board and a single-visit board.
 
 ## Deferred production questions
 

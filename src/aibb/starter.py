@@ -31,7 +31,7 @@ def _git(*arguments: str, cwd: Path | None = None) -> str:
     return result.stdout.strip()
 
 
-def initialize_data_repo(*, source: str, destination: Path, ref: str = "starter-v0.8") -> StarterResult:
+def initialize_data_repo(*, source: str, destination: Path, ref: str) -> StarterResult:
     target = destination.resolve()
     if target.exists():
         raise ValueError(f"destination already exists: {target}")
@@ -49,10 +49,10 @@ def initialize_data_repo(*, source: str, destination: Path, ref: str = "starter-
         load_archive(staging)
         _git("init", "--quiet", "--initial-branch=main", cwd=staging)
         _git("add", "--all", cwd=staging)
-        commit_message = f"Initialize Slowboard archive from {ref}\n\nStarter-Revision: {source_revision}"
+        commit_message = f"Initialize AIBB board from {ref}\n\nStarter-Revision: {source_revision}"
         _git(
             "-c",
-            "user.name=Slowboard Starter",
+            "user.name=AIBB Starter",
             "-c",
             "user.email=aibb@localhost",
             "commit",

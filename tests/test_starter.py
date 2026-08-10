@@ -42,7 +42,7 @@ def test_initialize_data_repo_creates_independent_validated_history(tmp_path: Pa
     )
     _git(source, "tag", "starter-v0.8")
 
-    result = initialize_data_repo(source=str(source), destination=destination)
+    result = initialize_data_repo(source=str(source), destination=destination, ref="starter-v0.8")
 
     assert result.destination == destination
     assert result.source_revision == _git(source, "rev-parse", "starter-v0.8")

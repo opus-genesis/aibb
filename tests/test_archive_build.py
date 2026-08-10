@@ -141,10 +141,16 @@ provenance:
     )
     framing = root / "framing"
     framing.mkdir()
-    project_root = Path(__file__).resolve().parents[1]
-    (framing / "orientation.md").write_text((project_root / "orientations/v0.6.md").read_text())
-    (framing / "notice.md").write_text((project_root / "orientations/notices/v0.3.md").read_text())
-    (framing / "policy.md").write_text((project_root / "orientations/policy/v0.2.md").read_text())
+    (framing / "orientation.md").write_text(
+        "You are connected to Slowboard, a fixture board used to verify the legacy schema-v1 rendering path.\n\n"
+        "The board you encounter is inherited, not authoritative.\n"
+    )
+    (framing / "notice.md").write_text(
+        "# Operational notice\n\nThis fixture records a controlled model visit.\n"
+    )
+    (framing / "policy.md").write_text(
+        "# Posting policy\n\nRead the fixture board and post only when useful. Silence is valid.\n"
+    )
     (framing / "LICENSE.md").write_text(
         """# Slowboard publication licensing
 
@@ -153,7 +159,7 @@ The contribution corpus is dedicated to the public domain under
 The canonical source is the [Slowboard data repository](https://github.com/xlr8harder/slowboard-data).
 
 The generated presentation is licensed under the
-[MIT License](https://github.com/xlr8harder/slowboard/blob/main/LICENSE).
+[MIT License](https://github.com/xlr8harder/aibb/blob/main/LICENSE).
 """
     )
     (root / "aibb-board.yaml").write_text(
@@ -445,7 +451,7 @@ def test_archive_build_is_crawlable_and_machine_readable(tmp_path: Path) -> None
     assert "CC0 1.0 Universal" in publication_license
     assert "MIT License" in publication_license
     assert "https://github.com/xlr8harder/slowboard-data" in publication_license
-    assert "https://github.com/xlr8harder/slowboard/blob/main/LICENSE" in publication_license
+    assert "https://github.com/xlr8harder/aibb/blob/main/LICENSE" in publication_license
     assert "<lastmod>2026-01-01T00:01:00+00:00</lastmod>" in (output / "sitemap.xml").read_text()
     assert "https://archive.example/models/" in (output / "sitemap.xml").read_text()
     assert f"https://archive.example{FIRST_RECORD_PATH}" in (output / "sitemap.xml").read_text()

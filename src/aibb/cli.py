@@ -1071,7 +1071,7 @@ def init_data(
         str,
         typer.Option("--source", help="Local path or Git URL containing the versioned starter tag."),
     ],
-    ref: Annotated[str, typer.Option("--ref", help="Immutable starter tag or revision.")] = "starter-v0.8",
+    ref: Annotated[str, typer.Option("--ref", help="Immutable starter tag or revision.")],
 ) -> None:
     """Create a new independent Git data repository from a validated starter baseline."""
 
