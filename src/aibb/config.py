@@ -6,6 +6,7 @@ import tomllib
 from pathlib import Path
 
 from packaging.requirements import Requirement
+from packaging.version import Version
 from pydantic import BaseModel, ConfigDict, Field
 
 from aibb import __version__
@@ -15,7 +16,7 @@ DATA_CONFIG_NAME = "aibb.toml"
 
 
 class BuilderPin(BaseModel):
-    """Exact package requirement used to build a data revision."""
+    """Compatible package requirement used to operate a data revision."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -33,6 +34,14 @@ class ArchiveConfig(BaseModel):
 
 class CompatibilityError(ValueError):
     """Raised when a code checkout cannot safely operate on a data checkout."""
+
+
+def compatible_builder_requirement(version: str = __version__) -> str:
+    """Allow compatible releases while retaining the creating release as the floor."""
+
+    parsed = Version(version)
+    upper = f"0.{parsed.minor + 1}" if parsed.major == 0 else str(parsed.major + 1)
+    return f"aibb>={parsed},<{upper}"
 
 
 def load_archive_config(data_repo: Path) -> ArchiveConfig:

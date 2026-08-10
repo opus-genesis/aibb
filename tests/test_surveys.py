@@ -12,6 +12,7 @@ import pytest
 from harn_ai.types import AssistantMessage, DoneEvent, TextContent, Usage, UsageCost
 from harn_ai.utils.event_stream import AssistantMessageEventStream
 
+from aibb import __version__
 from aibb.authors import build_author_invocation, load_author_invocation, save_author_invocation
 from aibb.board import load_board_package
 from aibb.domain import load_archive
@@ -384,6 +385,7 @@ def test_survey_ask_supports_every_non_openrouter_author_provider(
     )
     assert manifest["identity"]["provider"] == provider
     assert manifest["identity"]["model_name"] == model_name
+    assert manifest["aibb_version"] == __version__
     assert manifest["mode"] == "survey"
     assert manifest["read_only"] is True
 

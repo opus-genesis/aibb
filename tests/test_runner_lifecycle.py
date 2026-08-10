@@ -282,6 +282,7 @@ def test_run_defaults_to_headless_live_watch_with_concise_human_output(
     assert run_kwargs["console"] is not None
     manifest = RunManifest.load(Path(run_kwargs["run_dir"]) / "manifest.json")
     assert manifest.mode == "headless"
+    assert manifest.aibb_version == __version__
     watch_kwargs = observed["watch"]
     assert isinstance(watch_kwargs, dict)
     assert watch_kwargs["from_start"] is True

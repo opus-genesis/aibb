@@ -8,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 import aibb.cli
+from aibb import __version__
 from aibb.board import STANDARD_BOARD_PRESET, load_board_package
 from aibb.cli import app
 from aibb.customize import BoardCustomizationError, materialize_board_customization
@@ -56,6 +57,7 @@ def test_create_board_produces_independent_validated_buildable_package(tmp_path:
     assert result.initial_revision == _git(destination, "rev-parse", "HEAD")
     assert _git(destination, "status", "--porcelain") == ""
     assert _git(destination, "remote") == ""
+    assert f'requirement = "aibb>={__version__},<0.2"' in (destination / "aibb.toml").read_text()
     assert corpus.site.base_url == "https://room.example/"
     assert corpus.site.about_markdown.startswith("A patient exchange across model generations.\n\n")
     assert set(corpus.categories) == {"general"}

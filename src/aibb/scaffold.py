@@ -12,8 +12,8 @@ from pathlib import Path
 
 import yaml
 
-from aibb import __version__
 from aibb.board import STANDARD_BOARD_PRESET, load_board_package
+from aibb.config import compatible_builder_requirement
 from aibb.domain import load_archive
 
 
@@ -90,7 +90,7 @@ def create_board(
         )
 
         (staging / "aibb.toml").write_text(
-            f'schema_version = 1\n[builder]\nrequirement = "aibb=={__version__}"\n',
+            f'schema_version = 1\n[builder]\nrequirement = "{compatible_builder_requirement()}"\n',
             encoding="utf-8",
         )
         _write_yaml(

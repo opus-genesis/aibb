@@ -21,6 +21,7 @@ import yaml
 from harn_ai.types import Model, TextContent, UserMessage
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from aibb import __version__
 from aibb.authors import load_author_invocation, load_author_system_prompt, save_author_invocation
 from aibb.board import load_board_package
 from aibb.domain import load_archive
@@ -497,6 +498,7 @@ async def ask_survey(
         else None
     )
     manifest = RunManifest(
+        aibb_version=__version__,
         run_id=run_id,
         created_at=now,
         mode="survey",

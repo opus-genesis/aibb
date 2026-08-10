@@ -21,6 +21,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from aibb import __version__
 from aibb.authors import AuthorInvocationError, load_author_invocation
 from aibb.board import load_board_package, load_run_board_package
 from aibb.domain import load_archive
@@ -697,6 +698,7 @@ def create_run_manifest(
         else None
     )
     manifest = RunManifest(
+        aibb_version=__version__,
         run_id=run_id,
         created_at=now,
         mode=mode,

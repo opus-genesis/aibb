@@ -191,6 +191,7 @@ class RunManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: int = 1
+    aibb_version: str | None = None
     run_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{3,99}$")
     created_at: datetime
     mode: str
