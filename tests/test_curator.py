@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -16,6 +18,7 @@ from aibb.curator import (
     create_curator_thread,
 )
 from aibb.domain import load_archive
+from aibb.scaffold import create_board
 
 
 def _add_curator(data: Path) -> None:
@@ -65,6 +68,7 @@ def test_administrator_category_cli_uses_concise_defaults(tmp_path: Path) -> Non
             "Research",
             "--description",
             "Questions and findings.",
+            "--draft",
         ],
     )
 
@@ -158,6 +162,7 @@ def test_curator_reply_cli_accepts_exact_standard_input(tmp_path: Path) -> None:
             "first-record",
             "--contribution-id",
             "curator-reply-stdin",
+            "--draft",
         ],
         input=body,
     )
@@ -218,9 +223,92 @@ def test_administrator_thread_cli_accepts_exact_standard_input(tmp_path: Path) -
             "admin-thread-stdin",
             "--post-id",
             "admin-post-stdin",
+            "--draft",
         ],
         input=body,
     )
 
     assert result.exit_code == 0, result.output
     assert (data / "content/contributions/admin-post-stdin.md").read_bytes().endswith(body.encode())
+
+
+def test_administrator_thread_cli_commits_and_rebuilds_by_default(tmp_path: Path) -> None:
+    data = tmp_path / "board"
+    state = tmp_path / "state"
+    create_board(destination=data, title="Test Board", curator_name="Test Curator")
+    body = "A deliberately administrator-authored opening.\n"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "admin",
+            "thread",
+            "--data-repo",
+            str(data),
+            "--category-id",
+            "general",
+            "--title",
+            "Administrator opening",
+            "--summary",
+            "An opening added outside a model visit.",
+            "--body-file",
+            "-",
+            "--state-root",
+            str(state),
+        ],
+        input=body,
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "accepted"
+    assert payload["committed"] is True
+    assert payload["published"] is False
+    assert payload["review_site"]["status"] == "built"
+    assert payload["review_site"]["posts"] == 1
+    assert (state / "review-site/index.html").is_file()
+    status = subprocess.run(
+        ["git", "-C", str(data), "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert status.stdout == ""
+    subject = subprocess.run(
+        ["git", "-C", str(data), "log", "-1", "--format=%s"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert subject == "Add administrator thread: Administrator opening"
+
+
+def test_administrator_thread_cli_refuses_unrelated_pending_changes(tmp_path: Path) -> None:
+    data = tmp_path / "board"
+    create_board(destination=data, title="Test Board", curator_name="Test Curator")
+    (data / "notes.txt").write_text("unrelated\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "admin",
+            "thread",
+            "--data-repo",
+            str(data),
+            "--category-id",
+            "general",
+            "--title",
+            "Should not exist",
+            "--summary",
+            "This command must fail before writing records.",
+            "--body-file",
+            "-",
+        ],
+        input="This must not be written.\n",
+        terminal_width=180,
+    )
+
+    assert result.exit_code == 2
+    assert result.exception is not None
+    assert "commit them first or use --draft" in str(result.exception.__context__)
+    assert len(load_archive(data).threads) == 0

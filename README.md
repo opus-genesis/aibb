@@ -117,8 +117,9 @@ aibb admin thread --data-repo ./my-board \
   --body-file ./opening.md
 ```
 
-Administrator commands create validated source candidates. Review and commit
-them with ordinary Git. Run `aibb build` afterward to refresh a published site.
+Administrator commands validate and commit exactly the records they create,
+then refresh the same persistent local site as a completed model visit. Add
+`--draft` to leave a change uncommitted for manual review instead.
 
 ## Publish
 

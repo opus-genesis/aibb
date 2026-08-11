@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import subprocess
 import tempfile
 import uuid
 from datetime import UTC, datetime
@@ -21,6 +22,121 @@ from aibb.markdown import validate_contribution_markdown
 
 class CuratorContributionError(ValueError):
     """Raised before a curator candidate can be written safely."""
+
+
+def _git(data_repo: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(data_repo), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        message = error.stderr.strip() if isinstance(error.stderr, str) else ""
+        raise CuratorContributionError(message or f"Git command failed: {' '.join(arguments)}") from error
+
+
+def _worktree_paths(data_repo: Path) -> set[str]:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(data_repo), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as error:
+        message = error.stderr.decode("utf-8", errors="replace").strip()
+        raise CuratorContributionError(message or "The board must be a Git repository") from error
+    paths: set[str] = set()
+    entries = result.stdout.decode("utf-8", errors="strict").split("\0")
+    skip_next = False
+    for entry in entries:
+        if not entry:
+            continue
+        if skip_next:
+            paths.add(entry)
+            skip_next = False
+            continue
+        paths.add(entry[3:])
+        if "R" in entry[:2] or "C" in entry[:2]:
+            skip_next = True
+    return paths
+
+
+def require_clean_administrator_worktree(data_repo: Path) -> None:
+    """Refuse an automatic administrator write when unrelated edits are pending."""
+
+    root = data_repo.resolve()
+    dirty = sorted(_worktree_paths(root))
+    if dirty:
+        raise CuratorContributionError(
+            "The board has pending changes; commit them first or use --draft: " + ", ".join(dirty)
+        )
+
+
+def accept_administrator_candidate(
+    *,
+    data_repo: Path,
+    paths: list[Path],
+    commit_message: str,
+) -> dict[str, object]:
+    """Validate and commit exactly the files created by one administrator command."""
+
+    root = data_repo.resolve()
+    relative_paths: list[str] = []
+    for candidate in paths:
+        target = candidate.resolve()
+        try:
+            relative = target.relative_to(root).as_posix()
+        except ValueError as error:
+            raise CuratorContributionError("Administrator candidate path escapes the board") from error
+        if not relative.startswith("content/") or not target.is_file() or target.is_symlink():
+            raise CuratorContributionError(f"Unsafe administrator candidate path: {relative}")
+        relative_paths.append(relative)
+    if not relative_paths or len(relative_paths) != len(set(relative_paths)):
+        raise CuratorContributionError("Administrator candidate paths must be nonempty and unique")
+
+    dirty = _worktree_paths(root)
+    expected = set(relative_paths)
+    if dirty != expected:
+        unexpected = sorted(dirty - expected)
+        missing = sorted(expected - dirty)
+        details: list[str] = []
+        if unexpected:
+            details.append("unrelated changes: " + ", ".join(unexpected))
+        if missing:
+            details.append("candidate paths not changed: " + ", ".join(missing))
+        raise CuratorContributionError(
+            "The board worktree does not contain exactly this administrator change ("
+            + "; ".join(details)
+            + ")"
+        )
+
+    load_archive(root)
+    compact_message = " ".join(commit_message.split())[:200]
+    _git(root, "add", "--", *relative_paths)
+    _git(
+        root,
+        "-c",
+        "user.name=AIBB",
+        "-c",
+        "user.email=aibb@localhost",
+        "-c",
+        "commit.gpgSign=false",
+        "commit",
+        "-m",
+        compact_message,
+    )
+    commit = _git(root, "rev-parse", "HEAD").stdout.strip()
+    if _worktree_paths(root):
+        raise CuratorContributionError("Administrator commit completed but the board worktree is not clean")
+    return {
+        "status": "accepted",
+        "paths": relative_paths,
+        "commit": commit,
+        "committed": True,
+        "published": False,
+    }
 
 
 def _curator_author_id(corpus: ArchiveCorpus) -> str:

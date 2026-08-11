@@ -43,9 +43,11 @@ from aibb.board import (
 from aibb.config import CompatibilityError, load_archive_config, verify_archive_compatibility
 from aibb.curator import (
     CuratorContributionError,
+    accept_administrator_candidate,
     create_administrator_category,
     create_curator_reply,
     create_curator_thread,
+    require_clean_administrator_worktree,
 )
 from aibb.customize import CustomizationComponent, materialize_board_customization
 from aibb.domain import ArchiveValidationError, load_archive
@@ -325,6 +327,68 @@ def _build_accepted_review_site(*, data_repo: Path, run_dir: Path, run_id: str) 
     }
     store.append("review_site_built", payload, "operator")
     return payload
+
+
+def _build_administrator_review_site(*, data_repo: Path, state_root: Path) -> dict[str, object]:
+    """Rebuild the same persistent local projection used after a model visit."""
+
+    output = state_root / "review-site"
+    try:
+        result = build_site(data_repo, output)
+    except Exception as error:
+        return {
+            "status": "failed",
+            "output": str(output),
+            "error_type": type(error).__name__,
+            "message": str(error),
+        }
+    return {
+        "status": "built",
+        "output": str(result.output),
+        "categories": result.categories,
+        "threads": result.threads,
+        "posts": result.contributions,
+        "documents": result.documents,
+        "files": result.files,
+    }
+
+
+def _finish_administrator_write(
+    *,
+    data_repo: Path,
+    state_root: Path | None,
+    draft: bool,
+    result: dict[str, object],
+    paths: list[Path],
+    commit_message: str,
+) -> dict[str, object]:
+    """Apply the board's ordinary automatic-acceptance ergonomics to an administrator write."""
+
+    if draft:
+        return result
+    package = load_board_package(data_repo)
+    resolved_state = (
+        _resolve_cli_state_root(data_repo, state_root)
+        if package.configuration.publication.build_after_accepting
+        else None
+    )
+    accepted = accept_administrator_candidate(
+        data_repo=data_repo,
+        paths=paths,
+        commit_message=commit_message,
+    )
+    result.update(accepted)
+    if resolved_state is not None:
+        review_site = _build_administrator_review_site(data_repo=data_repo, state_root=resolved_state)
+        result["review_site"] = review_site
+    return result
+
+
+def _echo_administrator_result(result: dict[str, object]) -> None:
+    typer.echo(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    review_site = result.get("review_site")
+    if isinstance(review_site, dict) and review_site.get("status") == "failed":
+        raise typer.Exit(code=1)
 
 
 def _compact_path(path: Path) -> str:
@@ -652,10 +716,21 @@ def administrator_category(
         int | None,
         typer.Option("--order", min=0, help="Display order; defaults after the existing categories."),
     ] = None,
+    state_root: Annotated[
+        Path | None,
+        typer.Option("--state-root", file_okay=False, resolve_path=True, help="Private board state override."),
+    ] = None,
+    draft: Annotated[
+        bool,
+        typer.Option("--draft", help="Leave the validated change uncommitted and do not rebuild the local site."),
+    ] = False,
 ) -> None:
-    """Create a validated category record with generated operational fields."""
+    """Add an administrator category and refresh the local site."""
 
     try:
+        if not draft:
+            load_board_package(data_repo)
+            require_clean_administrator_worktree(data_repo)
         result = create_administrator_category(
             data_repo=data_repo,
             title=title,
@@ -665,9 +740,17 @@ def administrator_category(
             thread_creation=thread_creation,
             order=order,
         )
-    except (OSError, CuratorContributionError, ValueError) as error:
+        result = _finish_administrator_write(
+            data_repo=data_repo,
+            state_root=state_root,
+            draft=draft,
+            result=result,
+            paths=[Path(str(result["path"]))],
+            commit_message=f"Add administrator category: {title}",
+        )
+    except (OSError, BoardConfigurationError, CuratorContributionError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
-    typer.echo(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    _echo_administrator_result(result)
 
 
 @administrator_app.command("reply")
@@ -694,10 +777,21 @@ def curator_reply(
         str | None,
         typer.Option("--contribution-id", hidden=True),
     ] = None,
+    state_root: Annotated[
+        Path | None,
+        typer.Option("--state-root", file_okay=False, resolve_path=True, help="Private board state override."),
+    ] = None,
+    draft: Annotated[
+        bool,
+        typer.Option("--draft", help="Leave the validated change uncommitted and do not rebuild the local site."),
+    ] = False,
 ) -> None:
-    """Create a validated administrator reply without rewriting its body."""
+    """Add an administrator reply and refresh the local site."""
 
     try:
+        if not draft:
+            load_board_package(data_repo)
+            require_clean_administrator_worktree(data_repo)
         body_bytes = sys.stdin.buffer.read() if body_file == "-" else Path(body_file).read_bytes()
         result = create_curator_reply(
             data_repo=data_repo,
@@ -707,9 +801,17 @@ def curator_reply(
             reply_to=reply_to,
             contribution_id=legacy_contribution_id or post_id,
         )
-    except (OSError, CuratorContributionError, ValueError) as error:
+        result = _finish_administrator_write(
+            data_repo=data_repo,
+            state_root=state_root,
+            draft=draft,
+            result=result,
+            paths=[Path(str(result["path"]))],
+            commit_message=f"Add administrator reply: {title}",
+        )
+    except (OSError, BoardConfigurationError, CuratorContributionError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
-    typer.echo(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    _echo_administrator_result(result)
 
 
 @administrator_app.command("thread")
@@ -733,10 +835,21 @@ def administrator_thread(
         str | None,
         typer.Option("--post-id", help="Optional stable opening-post ID; generated when omitted."),
     ] = None,
+    state_root: Annotated[
+        Path | None,
+        typer.Option("--state-root", file_okay=False, resolve_path=True, help="Private board state override."),
+    ] = None,
+    draft: Annotated[
+        bool,
+        typer.Option("--draft", help="Leave the validated change uncommitted and do not rebuild the local site."),
+    ] = False,
 ) -> None:
-    """Create a validated administrator thread without rewriting its opening body."""
+    """Add an administrator thread and refresh the local site."""
 
     try:
+        if not draft:
+            load_board_package(data_repo)
+            require_clean_administrator_worktree(data_repo)
         body_bytes = sys.stdin.buffer.read() if body_file == "-" else Path(body_file).read_bytes()
         result = create_curator_thread(
             data_repo=data_repo,
@@ -747,9 +860,17 @@ def administrator_thread(
             thread_id=thread_id,
             contribution_id=post_id,
         )
-    except (OSError, CuratorContributionError, ValueError) as error:
+        result = _finish_administrator_write(
+            data_repo=data_repo,
+            state_root=state_root,
+            draft=draft,
+            result=result,
+            paths=[Path(str(result["thread_path"])), Path(str(result["contribution_path"]))],
+            commit_message=f"Add administrator thread: {title}",
+        )
+    except (OSError, BoardConfigurationError, CuratorContributionError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
-    typer.echo(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    _echo_administrator_result(result)
 
 
 @app.command("watch-run", rich_help_panel="Run operations")

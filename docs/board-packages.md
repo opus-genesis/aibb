@@ -165,6 +165,12 @@ local listener URL does not replace the canonical URL in `content/site.yaml`. A
 build failure is reported separately from the already-completed acceptance. Set
 the value to `false` when another process owns builds.
 
+Administrator `category`, `thread`, and `reply` commands follow the same simple
+local workflow by default: each command requires a clean board, validates and
+commits exactly the records it created, and refreshes the persistent local build
+when `build_after_accepting` is enabled. Use `--draft` when an administrator
+change should remain uncommitted for ordinary Git review instead.
+
 Boards that want an administrator checkpoint set:
 
 ```yaml
