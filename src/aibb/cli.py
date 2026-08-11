@@ -870,6 +870,14 @@ def extend_inference_budget(
             help="New cumulative provider-call ceiling; must exceed the existing ceiling.",
         ),
     ] = None,
+    max_cost_usd: Annotated[
+        float | None,
+        typer.Option(
+            "--max-cost-usd",
+            min=0.001,
+            help="New cumulative inference-cost ceiling; must exceed the existing ceiling.",
+        ),
+    ] = None,
     state_root: Annotated[
         Path | None,
         typer.Option("--state-root", file_okay=False, resolve_path=True, help="Override private session storage."),
@@ -881,8 +889,8 @@ def extend_inference_budget(
 ) -> None:
     """Extend a suspended run's operational inference ceiling."""
 
-    if max_total_tokens is None and max_calls is None:
-        raise typer.BadParameter("Provide --max-calls, --max-total-tokens, or both")
+    if max_total_tokens is None and max_calls is None and max_cost_usd is None:
+        raise typer.BadParameter("Provide --max-calls, --max-total-tokens, --max-cost-usd, or a combination")
 
     state_root = _resolve_cli_state_root(board, state_root)
     run_dir = state_root / run_id
@@ -901,6 +909,7 @@ def extend_inference_budget(
             max_calls=max_calls,
             max_input_tokens=max_total_tokens,
             max_total_tokens=max_total_tokens,
+            max_cost_usd=max_cost_usd,
         ),
     )
     event = store.append(
@@ -924,6 +933,8 @@ def extend_inference_budget(
                 "new_max_total_tokens": updated.max_total_tokens,
                 "previous_max_calls": previous.max_calls,
                 "new_max_calls": updated.max_calls,
+                "previous_max_cost_usd": previous.max_cost_usd,
+                "new_max_cost_usd": updated.max_cost_usd,
             },
             sort_keys=True,
         )

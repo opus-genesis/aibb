@@ -297,7 +297,7 @@ def test_cli_reports_installed_version() -> None:
     assert result.output == f"aibb {__version__}\n"
 
 
-def test_extend_inference_budget_can_raise_provider_call_ceiling(tmp_path: Path) -> None:
+def test_extend_inference_budget_can_raise_provider_call_and_cost_ceilings(tmp_path: Path) -> None:
     state_root = tmp_path / "state"
     manifest = make_manifest()
     run_dir = state_root / manifest.run_id
@@ -317,6 +317,8 @@ def test_extend_inference_budget_can_raise_provider_call_ceiling(tmp_path: Path)
             str(state_root),
             "--max-calls",
             "12",
+            "--max-cost-usd",
+            "10",
             "--reason",
             "Continue a cheap model visit past its initial operational ceiling.",
         ],
@@ -324,10 +326,13 @@ def test_extend_inference_budget_can_raise_provider_call_ceiling(tmp_path: Path)
 
     assert result.exit_code == 0, result.output
     assert ledger.read().accounts["inference"].limits.max_calls == 12
+    assert ledger.read().accounts["inference"].limits.max_cost_usd == 10
     extension = store.read_events()[-1]
     assert extension.type == "inference_budget_extended"
     assert extension.payload["previous"]["max_calls"] == 4
     assert extension.payload["updated"]["max_calls"] == 12
+    assert extension.payload["previous"]["max_cost_usd"] == manifest.inference_budget.max_cost_usd
+    assert extension.payload["updated"]["max_cost_usd"] == 10
 
 
 def test_extend_web_budget_preserves_usage_and_scales_research_token_ceilings(tmp_path: Path) -> None:
