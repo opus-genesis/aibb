@@ -308,6 +308,49 @@ def _completed_visit_record_digests(run_dir: Path, run_id: str) -> dict[str, str
     return records
 
 
+def _previous_visit_records_to_suppress(
+    data_repo: Path,
+    *,
+    run_dir: Path,
+    run_id: str,
+    current_revision: str,
+) -> dict[str, str]:
+    """Suppress ordinary visit writes, but not records revealed by a side-branch merge.
+
+    A normal accepted visit is published directly on the board's first-parent
+    history, so repeating its own records in the next visit's update list only
+    adds noise. A frozen round is different: its accepted commit is held on a
+    side branch and only becomes visible in the atomic merge. In that case the
+    complete reveal, including the returning author's own response, is new
+    board activity relative to the snapshot they received.
+    """
+
+    records = _completed_visit_record_digests(run_dir, run_id)
+    acceptance_path = run_dir / "acceptance.json"
+    if not records or not acceptance_path.is_file():
+        return records
+    try:
+        acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return records
+    accepted_commit = acceptance.get("commit")
+    if acceptance.get("status") != "accepted" or not isinstance(accepted_commit, str):
+        return records
+    if not re.fullmatch(r"[a-f0-9]{40}", accepted_commit):
+        return records
+    history = subprocess.run(
+        ["git", "-C", str(data_repo), "rev-list", "--first-parent", current_revision],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if history.returncode != 0:
+        raise ValueError("Could not inspect the board's first-parent publication history")
+    if accepted_commit not in history.stdout.splitlines():
+        return {}
+    return records
+
+
 def _return_delta_sha256(payload: dict[str, object]) -> str:
     canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -645,9 +688,11 @@ def create_run_manifest(
                 previous_revision=previous_revision,
                 current_revision=current_revision,
                 previous_run_id=previous_manifest.run_id,
-                previous_visit_records=_completed_visit_record_digests(
-                    previous_dir,
-                    previous_manifest.run_id,
+                previous_visit_records=_previous_visit_records_to_suppress(
+                    data_repo,
+                    run_dir=previous_dir,
+                    run_id=previous_manifest.run_id,
+                    current_revision=current_revision,
                 ),
             )
             return_continuity = _return_continuity_artifact(previous_visits)

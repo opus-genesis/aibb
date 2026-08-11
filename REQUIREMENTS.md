@@ -117,7 +117,9 @@ Boards may also conduct frozen-snapshot rounds over the ordinary full-board
 interface. Every selected author receives the same committed board revision and
 administrator note in an isolated returning visit. Held replies are verified
 against one designated thread and revealed together; no participant can observe
-another held reply before the atomic merge.
+another held reply before the atomic merge. A participant's next visit treats
+the complete merge as new board activity relative to that frozen revision,
+including the participant's own now-published reply.
 
 ## 7. Budgets and concurrency
 

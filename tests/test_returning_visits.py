@@ -10,7 +10,12 @@ from harn_ai.types import validate_message
 from test_archive_build import _write_archive
 
 from aibb.harness.engine import EngineSnapshot
-from aibb.harness.runner import _initial_visit_messages, _return_delta_payload, create_run_manifest
+from aibb.harness.runner import (
+    _initial_visit_messages,
+    _previous_visit_records_to_suppress,
+    _return_delta_payload,
+    create_run_manifest,
+)
 from aibb.protocol.server import _tools
 from aibb.protocol.state import ArchiveMcpState
 from aibb.sessions import SessionStore
@@ -256,6 +261,56 @@ def test_return_delta_keeps_an_administrator_edit_to_a_prior_visit_record(tmp_pa
     )
 
     assert [change["record_id"] for change in delta["changes"]] == ["prior-visit-record"]
+
+
+def test_return_delta_suppresses_ordinary_first_parent_visit_records(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    run_dir = tmp_path / "state/run-ordinary"
+    _write_archive(data)
+    subprocess.run(["git", "init", "-q", str(data)], check=True)
+    _commit(data, "baseline")
+    record = data / "content/contributions/ordinary-visit-record.md"
+    record.write_text("ordinary visit record\n", encoding="utf-8")
+    digest = hashlib.sha256(record.read_bytes()).hexdigest()
+    _commit(data, "accept ordinary visit")
+    accepted_commit = subprocess.run(
+        ["git", "-C", str(data), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    receipts = run_dir / "mcp/receipts"
+    receipts.mkdir(parents=True)
+    (receipts / "ordinary.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-ordinary",
+                "paths": {"content/contributions/ordinary-visit-record.md": digest},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "acceptance.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-ordinary",
+                "status": "accepted",
+                "commit": accepted_commit,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    records = _previous_visit_records_to_suppress(
+        data,
+        run_dir=run_dir,
+        run_id="run-ordinary",
+        current_revision=accepted_commit,
+    )
+
+    assert records == {"content/contributions/ordinary-visit-record.md": digest}
 
 
 def test_returning_visit_reuses_author_with_fresh_run_and_public_git_delta(tmp_path: Path) -> None:

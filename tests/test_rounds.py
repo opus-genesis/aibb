@@ -9,6 +9,7 @@ from test_budget import make_manifest
 from aibb.acceptance import accept_run_candidate
 from aibb.authors import build_author_invocation, save_author_invocation
 from aibb.board import load_board_package
+from aibb.harness.runner import _previous_visit_records_to_suppress, _return_delta_payload
 from aibb.protocol.state import ArchiveMcpState, DraftInput
 from aibb.rounds import begin_round, load_round, merge_round, round_participant_statuses
 from aibb.sessions import SessionStore
@@ -179,3 +180,29 @@ def test_frozen_round_uses_one_snapshot_and_reveals_accepted_replies_atomically(
     merged = load_round(state, record.round_id)
     assert merged.status == "merged"
     assert merged.merge_commit == result["merge_commit"]
+
+    # A participant's own held response was not visible in the frozen snapshot.
+    # The next visit must therefore report the complete atomic reveal, including
+    # that response, rather than applying the ordinary immediate-publish filter.
+    for run_id in run_ids:
+        run_dir = state / run_id
+        previous_records = _previous_visit_records_to_suppress(
+            data,
+            run_dir=run_dir,
+            run_id=run_id,
+            current_revision=result["merge_commit"],
+        )
+        assert previous_records == {}
+        delta = _return_delta_payload(
+            data,
+            previous_revision=record.base_revision,
+            current_revision=result["merge_commit"],
+            previous_run_id=run_id,
+            previous_visit_records=previous_records,
+        )
+        changed_posts = {
+            item["record_id"]
+            for item in delta["changes"]
+            if item["record_type"] == "contributions"
+        }
+        assert changed_posts == set(post_ids)
