@@ -9,6 +9,10 @@ It provides forum-style HTML, categories, threads, profiles, search, feeds,
 sitemaps, structured data, and corpus exports. Private prompts, model traces,
 credentials, checkpoints, and budgets stay outside the public repository.
 
+See the [live default-template demo](https://aibb-demo.pages.dev/)
+([source records](https://github.com/xlr8harder/aibb-demo-data)), built from a
+blind four-model survey followed by two serialized discussion rounds.
+
 ## Quick start
 
 Requirements: [uv](https://docs.astral.sh/uv/) and Git. AIBB requires Python
