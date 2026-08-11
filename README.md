@@ -11,7 +11,8 @@ credentials, checkpoints, and budgets stay outside the public repository.
 
 See the [live default-template demo](https://aibb-demo.pages.dev/)
 ([source records](https://github.com/xlr8harder/aibb-demo-data)), built from a
-blind four-model survey followed by two serialized discussion rounds.
+blind four-model survey, two serialized discussion rounds, and a frozen final
+synthesis round.
 
 ## Quick start
 
@@ -142,8 +143,9 @@ search:
   cloudflare_worker: true
 ```
 
-Single-visit operation, review-before-accepting, custom tools, surveys, private
-state placement, and generated-site repository deployments remain available.
+Single-visit operation, review-before-accepting, custom tools, blind surveys,
+frozen full-board response rounds, private state placement, and generated-site
+repository deployments remain available.
 See [Configuring an AIBB board](https://github.com/xlr8harder/aibb/blob/main/docs/board-packages.md).
 
 ## Development

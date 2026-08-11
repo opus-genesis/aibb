@@ -76,6 +76,14 @@ from aibb.harness.tinker import (
 )
 from aibb.harness.watch import latest_run_directory, watch_event_stream, watch_state_root
 from aibb.publish import check_publication, deploy_publication, prepare_publication
+from aibb.rounds import (
+    RoundError,
+    begin_round,
+    load_round,
+    merge_round,
+    round_participant_statuses,
+    run_round,
+)
 from aibb.runtime import BudgetLedger, RunManifest
 from aibb.runtime.models import (
     AuthorInvocation,
@@ -102,6 +110,10 @@ config_app = typer.Typer(no_args_is_help=True, help="Inspect the board's expande
 customize_app = typer.Typer(no_args_is_help=True, help="Copy inherited defaults into the board for local editing.")
 author_app = typer.Typer(no_args_is_help=True, help="Register reusable private model-author invocations.")
 survey_app = typer.Typer(no_args_is_help=True, help="Collect private blind responses and reveal them together.")
+round_app = typer.Typer(
+    no_args_is_help=True,
+    help="Collect full-board responses from one frozen snapshot and reveal them together.",
+)
 app.add_typer(publish_app, name="publish", rich_help_panel="Review and publishing")
 app.add_typer(administrator_app, name="admin", rich_help_panel="Board management")
 app.add_typer(administrator_app, name="curator", hidden=True)
@@ -109,6 +121,7 @@ app.add_typer(config_app, name="config", rich_help_panel="Board management")
 app.add_typer(customize_app, name="customize", rich_help_panel="Board management")
 app.add_typer(author_app, name="author", rich_help_panel="Board management")
 app.add_typer(survey_app, name="survey", rich_help_panel="Board management")
+app.add_typer(round_app, name="round", rich_help_panel="Board management")
 
 
 @app.callback()
@@ -415,10 +428,7 @@ def _echo_run_ready(payload: dict[str, object], *, watching: bool) -> None:
     lines = [
         f"Starting {payload['display_name']} on {board['title']}",
         f"  Run       {payload['run_id']}",
-        (
-            f"  Visit     {visit['number']} ({visit['kind']}) · author "
-            f"{visit['public_author_id']}"
-        ),
+        (f"  Visit     {visit['number']} ({visit['kind']}) · author {visit['public_author_id']}"),
         f"  Model     {payload['model']} via {payload['provider']}",
         (
             f"  Runtime   {payload['mode']} · reasoning {reasoning_label} · "
@@ -1607,10 +1617,7 @@ def new_board(
             "configure": str(result.destination / "content/site.yaml"),
             "preview": f"aibb preview {result.destination}",
             "provider_setup": "Set OPENROUTER_API_KEY in the environment.",
-            "run": (
-                f"aibb run {result.destination} --provider openrouter "
-                "--model deepseek/deepseek-v4-flash-0731"
-            ),
+            "run": (f"aibb run {result.destination} --provider openrouter --model deepseek/deepseek-v4-flash-0731"),
         },
         "status": "initialized",
     }
@@ -1671,9 +1678,7 @@ def create_author(
     resolved_state = _resolve_cli_state_root(data_repo, state_root)
     if openrouter_provider is not None and provider != "openrouter":
         raise typer.BadParameter("--openrouter-provider is only valid with --provider openrouter")
-    system_prompt_text = _read_system_prompt_options(
-        system_prompt_file, system_prompt_label, system_prompt_source_url
-    )
+    system_prompt_text = _read_system_prompt_options(system_prompt_file, system_prompt_label, system_prompt_source_url)
     normalized = _normalized_model_name(provider, model)
     effective_display = display_name or normalized
     selected_author_id = author_id or _generated_author_id(system_prompt_label or normalized, normalized)
@@ -1802,9 +1807,7 @@ def list_authors(
             "display_name": invocation.display_name,
             "provider": invocation.provider,
             "model": invocation.model_name,
-            "prompt_configuration": (
-                invocation.system_prompt.label if invocation.system_prompt is not None else None
-            ),
+            "prompt_configuration": (invocation.system_prompt.label if invocation.system_prompt is not None else None),
             "published_author": invocation.author_id in public_authors,
         }
         for invocation in list_author_invocations(resolved_state, board_id=package.configuration.id)
@@ -1826,8 +1829,7 @@ def list_authors(
     for author in payload:
         published = "; published" if author["published_author"] else ""
         typer.echo(
-            f"  {author['author_id']} — {author['display_name']} "
-            f"({author['provider']}: {author['model']}{published})"
+            f"  {author['author_id']} — {author['display_name']} ({author['provider']}: {author['model']}{published})"
         )
 
 
@@ -1950,6 +1952,176 @@ def reveal_blind_survey(
     except (SurveyError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+@round_app.command("begin")
+def begin_frozen_round(
+    board: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+    thread: Annotated[
+        str,
+        typer.Option("--thread", help="Existing thread ID or slug that receives every held response."),
+    ] = ...,
+    author_ids: Annotated[
+        list[str] | None,
+        typer.Option("--author", help="Stable registered author ID; repeat once per participant."),
+    ] = None,
+    note: Annotated[
+        str | None,
+        typer.Option("--note", help="Identical model-visible administrator direction for every lane."),
+    ] = None,
+    note_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--note-file",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+            help="UTF-8 file containing the identical direction; use instead of --note.",
+        ),
+    ] = None,
+    round_id: Annotated[
+        str | None,
+        typer.Option("--round-id", help="Optional stable private round ID; generated when omitted."),
+    ] = None,
+    state_root: Annotated[Path | None, typer.Option("--state-root", file_okay=False, resolve_path=True)] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable output.")] = False,
+) -> None:
+    """Freeze the current board into one isolated returning-visit lane per author."""
+
+    if (note is None) == (note_file is None):
+        raise typer.BadParameter("Provide exactly one of --note or --note-file")
+    try:
+        administrator_note = note if note is not None else note_file.read_text(encoding="utf-8")
+        resolved_state = _resolve_cli_state_root(board, state_root)
+        record = begin_round(
+            data_repo=board,
+            state_root=resolved_state,
+            thread=thread,
+            author_ids=author_ids or [],
+            administrator_note=administrator_note,
+            round_id=round_id,
+        )
+    except (OSError, RoundError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    if json_output:
+        typer.echo(record.model_dump_json(exclude_none=True))
+        return
+    typer.echo(f"Prepared frozen round {record.round_id}")
+    typer.echo(f"Snapshot: {record.base_revision}")
+    typer.echo(f"Target:   {record.target_thread_id}")
+    typer.echo("Authors:  " + ", ".join(item.author_id for item in record.participants))
+    typer.echo(f"Next:     aibb round run {board} {record.round_id}")
+
+
+@round_app.command("status")
+def show_frozen_round_status(
+    board: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+    round_id: Annotated[str, typer.Argument(help="Private round ID returned by round begin.")] = ...,
+    state_root: Annotated[Path | None, typer.Option("--state-root", file_okay=False, resolve_path=True)] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable output.")] = False,
+) -> None:
+    """Show each lane without exposing held response text."""
+
+    try:
+        resolved_state = _resolve_cli_state_root(board, state_root)
+        record = load_round(resolved_state, round_id)
+        statuses = round_participant_statuses(resolved_state, record)
+    except (RoundError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    payload = {
+        "round_id": record.round_id,
+        "status": record.status,
+        "base_revision": record.base_revision,
+        "target_thread_id": record.target_thread_id,
+        "merge_commit": record.merge_commit,
+        "participants": [item.model_dump(mode="json", exclude_none=True) for item in statuses],
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return
+    typer.echo(f"Round {record.round_id} · {record.status} · snapshot {record.base_revision[:12]}")
+    for item in statuses:
+        suffix = f" · {item.run_id}" if item.run_id else ""
+        if item.detail:
+            suffix += f" · {item.detail}"
+        typer.echo(f"  {item.author_id}: {item.status}{suffix}")
+
+
+@round_app.command("run")
+def run_frozen_round(
+    board: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+    round_id: Annotated[str, typer.Argument(help="Private round ID returned by round begin.")] = ...,
+    author_ids: Annotated[
+        list[str] | None,
+        typer.Option("--author", help="Run only this participant; repeat to select several. Omit to run all pending."),
+    ] = None,
+    state_root: Annotated[Path | None, typer.Option("--state-root", file_okay=False, resolve_path=True)] = None,
+    watch: Annotated[
+        bool,
+        typer.Option("--watch/--no-watch", help="Render each selected model visit while it runs."),
+    ] = True,
+    max_cost_usd: Annotated[
+        float | None,
+        typer.Option("--max-cost-usd", min=0.001, help="Optional inference-cost ceiling for each selected lane."),
+    ] = None,
+) -> None:
+    """Run selected pending lanes serially; accepted replies remain mutually hidden."""
+
+    try:
+        resolved_state = _resolve_cli_state_root(board, state_root)
+        statuses = run_round(
+            data_repo=board,
+            state_root=resolved_state,
+            round_id=round_id,
+            author_ids=author_ids,
+            watch=watch,
+            max_cost_usd=max_cost_usd,
+        )
+    except (RoundError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(f"Round {round_id} lane status:")
+    for item in statuses:
+        typer.echo(f"  {item.author_id}: {item.status}")
+    if all(item.status == "accepted" for item in statuses):
+        typer.echo(f"Ready: aibb round merge {board} {round_id}")
+
+
+@round_app.command("merge")
+def merge_frozen_round(
+    board: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ] = Path("."),
+    round_id: Annotated[str, typer.Argument(help="Private round ID returned by round begin.")] = ...,
+    state_root: Annotated[Path | None, typer.Option("--state-root", file_okay=False, resolve_path=True)] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable output.")] = False,
+) -> None:
+    """Audit all held replies and reveal them in one merge commit."""
+
+    try:
+        resolved_state = _resolve_cli_state_root(board, state_root)
+        result = merge_round(data_repo=board, state_root=resolved_state, round_id=round_id)
+    except (OSError, RoundError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return
+    typer.echo(f"Merged frozen round {round_id}")
+    typer.echo(f"Commit: {result['merge_commit']}")
+    typer.echo(f"Posts:  {len(result['post_paths'])}")
+    if result.get("review_site"):
+        typer.echo(f"Built:  {result['review_site']}")
 
 
 @app.command("run", no_args_is_help=True, rich_help_panel="Common commands")
@@ -2202,9 +2374,7 @@ def run_model(
             "--max-web-calls",
             min=0,
             max=200,
-            help=(
-                "Override the board's shared allowance for research, current-events, pagination, and URL fetches."
-            ),
+            help=("Override the board's shared allowance for research, current-events, pagination, and URL fetches."),
         ),
     ] = None,
     max_web_cost_usd: Annotated[
@@ -2235,9 +2405,7 @@ def run_model(
     if legacy_max_contributions_per_thread is not None:
         max_contributions_per_thread = legacy_max_contributions_per_thread
     max_output_tokens = max_output_tokens if max_output_tokens is not None else budget_defaults.max_output_tokens
-    max_provider_turns = (
-        max_provider_turns if max_provider_turns is not None else budget_defaults.max_provider_turns
-    )
+    max_provider_turns = max_provider_turns if max_provider_turns is not None else budget_defaults.max_provider_turns
     max_total_tokens = max_total_tokens if max_total_tokens is not None else budget_defaults.max_total_tokens
     max_cost_usd = max_cost_usd if max_cost_usd is not None else budget_defaults.max_cost_usd
     max_generated_images = (
@@ -2246,13 +2414,9 @@ def run_model(
     max_imported_images = (
         max_imported_images if max_imported_images is not None else budget_defaults.max_imported_images
     )
-    max_image_cost_usd = (
-        max_image_cost_usd if max_image_cost_usd is not None else budget_defaults.max_image_cost_usd
-    )
+    max_image_cost_usd = max_image_cost_usd if max_image_cost_usd is not None else budget_defaults.max_image_cost_usd
     max_web_calls = max_web_calls if max_web_calls is not None else budget_defaults.max_web_calls
-    max_web_cost_usd = (
-        max_web_cost_usd if max_web_cost_usd is not None else budget_defaults.max_web_cost_usd
-    )
+    max_web_cost_usd = max_web_cost_usd if max_web_cost_usd is not None else budget_defaults.max_web_cost_usd
     curator_note = legacy_curator_note if legacy_curator_note is not None else administrator_note
     try:
         state_root = _resolve_cli_state_root(data_repo, state_root, board_config=board_config)
@@ -2279,9 +2443,7 @@ def run_model(
         }
         supplied = [name for name, value in conflicting.items() if value is not None]
         if supplied:
-            raise typer.BadParameter(
-                "--author supplies identity and invocation settings; omit " + ", ".join(supplied)
-            )
+            raise typer.BadParameter("--author supplies identity and invocation settings; omit " + ", ".join(supplied))
         try:
             author_invocation = load_author_invocation(state_root, author_id)
         except AuthorInvocationError as error:

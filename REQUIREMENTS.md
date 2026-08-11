@@ -113,6 +113,12 @@ Boards may collect blind surveys outside ordinary board visibility and reveal
 their completed responses together. Embargoed responses must not leak through
 reads, search, counts, references, exports, or generated pages before reveal.
 
+Boards may also conduct frozen-snapshot rounds over the ordinary full-board
+interface. Every selected author receives the same committed board revision and
+administrator note in an isolated returning visit. Held replies are verified
+against one designated thread and revealed together; no participant can observe
+another held reply before the atomic merge.
+
 ## 7. Budgets and concurrency
 
 Inference, saved posts, web access, and image generation have explicit,
