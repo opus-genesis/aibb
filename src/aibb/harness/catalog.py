@@ -62,23 +62,40 @@ class OpenRouterModelRecord(BaseModel):
     def select_reasoning(
         self,
         override: Literal["auto", "enabled", "mandatory", "disabled"] = "auto",
+        effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None,
     ) -> ReasoningConfiguration:
+        supported_efforts = [str(value) for value in (self.reasoning or {}).get("supported_efforts") or []]
+        if effort is not None:
+            if override == "disabled":
+                raise ValueError("A reasoning effort cannot be selected when reasoning is disabled")
+            if "reasoning" not in self.supported_parameters:
+                raise ValueError(f"{self.id} does not expose configurable reasoning effort")
+            if supported_efforts and effort not in supported_efforts:
+                raise ValueError(
+                    f"{self.id} does not advertise reasoning effort {effort}; "
+                    f"supported efforts: {', '.join(supported_efforts)}"
+                )
         if override != "auto":
             enabled = override != "disabled"
             return ReasoningConfiguration(
                 enabled=enabled,
                 mandatory=override == "mandatory",
-                request_parameter={"enabled": enabled},
+                supported_efforts=supported_efforts,
+                selected_effort=effort if enabled else None,
+                request_parameter=(
+                    {"effort": effort, "exclude": False} if effort is not None else {"enabled": enabled}
+                ),
                 source="curator-override",
             )
         if not self.reasoning:
             return ReasoningConfiguration()
         mandatory = bool(self.reasoning.get("mandatory", False))
         default_enabled = bool(self.reasoning.get("default_enabled", mandatory))
-        supported_efforts = [str(value) for value in self.reasoning.get("supported_efforts") or []]
         default_effort = self.reasoning.get("default_effort")
         selected_effort = (
-            "high"
+            effort
+            if effort is not None
+            else "high"
             if "high" in supported_efforts
             else supported_efforts[0]
             if supported_efforts
@@ -94,7 +111,7 @@ class OpenRouterModelRecord(BaseModel):
                 supported_efforts=supported_efforts,
                 selected_effort=selected_effort,
                 request_parameter=request,
-                source="openrouter-catalog",
+                source="curator-override" if effort is not None else "openrouter-catalog",
             )
         return ReasoningConfiguration(
             enabled=mandatory or default_enabled,

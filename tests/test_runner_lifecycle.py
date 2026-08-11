@@ -226,13 +226,14 @@ def test_run_cli_exposes_public_developer_override() -> None:
     assert "--production" not in option_names
     assert "--developer" in option_names
     assert "--author" in option_names
+    assert "--reasoning-effort" in option_names
     assert "--return-as" not in option_names
     assert "presentation-poor" in result.output
     display_option = next(parameter for parameter in run_command.params if "--display-name" in parameter.opts)
     assert "inferred from provider" in display_option.help
 
 
-def test_run_defaults_to_headless_live_watch_with_concise_human_output(
+def test_run_defaults_to_headless_live_watch_and_accepts_reasoning_effort(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -248,6 +249,12 @@ def test_run_defaults_to_headless_live_watch_with_concise_human_output(
             pricing={"prompt": "0.000001", "completion": "0.000002"},
             architecture={"input_modalities": ["text"]},
             supported_parameters=["tools", "reasoning"],
+            reasoning={
+                "mandatory": False,
+                "default_enabled": True,
+                "default_effort": "medium",
+                "supported_efforts": ["high", "medium", "low"],
+            },
             top_provider={"max_completion_tokens": 16_000},
         )
 
@@ -266,12 +273,24 @@ def test_run_defaults_to_headless_live_watch_with_concise_human_output(
 
     result = CliRunner().invoke(
         app,
-        ["run", str(data), "--provider", "openrouter", "--model", "example/model", "--images", "disable"],
+        [
+            "run",
+            str(data),
+            "--provider",
+            "openrouter",
+            "--model",
+            "example/model",
+            "--reasoning-effort",
+            "high",
+            "--images",
+            "disable",
+        ],
     )
 
     assert result.exit_code == 0, result.output
     assert result.output.startswith("Starting Model on Test Board\n")
     assert "Runtime   headless" in result.output
+    assert "reasoning high" in result.output
     assert "Limits    5 posts" in result.output
     assert "Watching reasoning, tool calls, and usage." in result.output
     assert "package_sha256" not in result.output
@@ -283,6 +302,9 @@ def test_run_defaults_to_headless_live_watch_with_concise_human_output(
     manifest = RunManifest.load(Path(run_kwargs["run_dir"]) / "manifest.json")
     assert manifest.mode == "headless"
     assert manifest.aibb_version == __version__
+    assert manifest.reasoning.selected_effort == "high"
+    assert manifest.reasoning.request_parameter == {"effort": "high", "exclude": False}
+    assert manifest.reasoning.source == "curator-override"
     watch_kwargs = observed["watch"]
     assert isinstance(watch_kwargs, dict)
     assert watch_kwargs["from_start"] is True

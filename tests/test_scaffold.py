@@ -236,8 +236,13 @@ def test_new_board_cli_defaults_to_human_quickstart_with_versioned_json_opt_in(t
     assert f"cd '{human_destination}'" in human.output
     assert "export OPENROUTER_API_KEY=..." in human.output
     assert "aibb run --provider openrouter --model deepseek/deepseek-v4-flash-0731" in human.output
+    assert "--reasoning-effort high" in human.output
     assert "aibb preview" in human.output
     assert not human.output.lstrip().startswith("{")
+
+    generated_readme = (human_destination / "README.md").read_text(encoding="utf-8")
+    assert "--model deepseek/deepseek-v4-flash-0731" in generated_readme
+    assert "--reasoning-effort high" in generated_readme
 
     json_destination = tmp_path / "json-board"
     machine = CliRunner().invoke(app, ["new-board", str(json_destination), "--json"])
@@ -250,6 +255,7 @@ def test_new_board_cli_defaults_to_human_quickstart_with_versioned_json_opt_in(t
     assert payload["board_id"] == "json-board"
     assert payload["destination"] == str(json_destination)
     assert payload["initial_revision"] == _git(json_destination, "rev-parse", "HEAD")
+    assert payload["next"]["run"].endswith("--reasoning-effort high")
 
 
 def test_common_board_commands_use_positional_paths_and_human_output_by_default(tmp_path: Path) -> None:

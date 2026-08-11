@@ -35,6 +35,38 @@ def test_catalog_selects_high_reasoning_without_starving_the_visible_answer() ->
     assert selected.request_parameter == {"effort": "high", "exclude": False}
 
 
+def test_catalog_honors_an_explicit_supported_reasoning_effort() -> None:
+    record = _record(
+        {
+            "mandatory": False,
+            "default_enabled": True,
+            "default_effort": "medium",
+            "supported_efforts": ["high", "medium", "low"],
+        }
+    )
+
+    selected = record.select_reasoning(effort="low")
+
+    assert selected.enabled is True
+    assert selected.selected_effort == "low"
+    assert selected.request_parameter == {"effort": "low", "exclude": False}
+    assert selected.source == "curator-override"
+
+
+def test_catalog_rejects_an_unadvertised_reasoning_effort() -> None:
+    record = _record(
+        {
+            "mandatory": False,
+            "default_enabled": True,
+            "default_effort": "medium",
+            "supported_efforts": ["high", "medium", "low"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="does not advertise reasoning effort max"):
+        record.select_reasoning(effort="max")
+
+
 def test_non_reasoning_catalog_record_does_not_invent_a_mode() -> None:
     selected = _record(None).select_reasoning()
 

@@ -1617,7 +1617,10 @@ def new_board(
             "configure": str(result.destination / "content/site.yaml"),
             "preview": f"aibb preview {result.destination}",
             "provider_setup": "Set OPENROUTER_API_KEY in the environment.",
-            "run": (f"aibb run {result.destination} --provider openrouter --model deepseek/deepseek-v4-flash-0731"),
+            "run": (
+                f"aibb run {result.destination} --provider openrouter "
+                "--model deepseek/deepseek-v4-flash-0731 --reasoning-effort high"
+            ),
         },
         "status": "initialized",
     }
@@ -1637,7 +1640,10 @@ def new_board(
                 "Next:",
                 f"  cd {quoted_destination}",
                 "  export OPENROUTER_API_KEY=...",
-                "  aibb run --provider openrouter --model deepseek/deepseek-v4-flash-0731",
+                (
+                    "  aibb run --provider openrouter --model deepseek/deepseek-v4-flash-0731 "
+                    "--reasoning-effort high"
+                ),
                 "  aibb preview",
             ]
         )
@@ -2276,6 +2282,13 @@ def run_model(
             ),
         ),
     ] = None,
+    reasoning_effort: Annotated[
+        Literal["low", "medium", "high", "xhigh", "max"] | None,
+        typer.Option(
+            "--reasoning-effort",
+            help="Pin a supported reasoning effort for this new model invocation.",
+        ),
+    ] = None,
     tool_choice: Annotated[
         Literal["auto", "required"],
         typer.Option(
@@ -2435,6 +2448,7 @@ def run_model(
             "--generation": generation,
             "--lineage": lineage,
             "--reasoning-mode": reasoning_mode,
+            "--reasoning-effort": reasoning_effort,
             "--openrouter-provider": openrouter_provider,
             "--system-prompt-file": system_prompt_file,
             "--system-prompt-label": system_prompt_label,
@@ -2465,6 +2479,8 @@ def run_model(
     if resume_run:
         if board_config is not None:
             raise typer.BadParameter("A resumed run uses its persisted board package; omit --board-config")
+        if reasoning_mode is not None or reasoning_effort is not None:
+            raise typer.BadParameter("A resumed run uses its persisted reasoning configuration; omit reasoning options")
         if openrouter_provider is not None:
             raise typer.BadParameter("A resumed run uses its persisted provider route; omit --openrouter-provider")
         if system_prompt_file or system_prompt_label or system_prompt_source_url:
@@ -2550,7 +2566,10 @@ def run_model(
                 average_input_tokens * prompt_price + average_output_tokens * completion_price
             )
             effective_cost_usd = max_cost_usd or round(max(0.5, estimated_cost * 1.5), 2)
-            reasoning_configuration = catalog.select_reasoning(reasoning_mode)
+            try:
+                reasoning_configuration = catalog.select_reasoning(reasoning_mode, reasoning_effort)
+            except ValueError as error:
+                raise typer.BadParameter(str(error)) from error
             openrouter_routing_configuration = (
                 OpenRouterRoutingConfiguration(
                     provider_slug=openrouter_provider,
@@ -2578,7 +2597,7 @@ def run_model(
                 max_provider_turns
                 * (estimated_input_per_turn * prompt_price + effective_output_tokens * completion_price),
             )
-            if reasoning_mode not in {"auto", "disabled"}:
+            if reasoning_mode not in {"auto", "disabled"} or reasoning_effort is not None:
                 raise typer.BadParameter(f"{model} does not support Anthropic extended thinking")
             reasoning_configuration = ReasoningConfiguration(enabled=False, source="unavailable")
             openrouter_routing_configuration = None
@@ -2611,15 +2630,24 @@ def run_model(
                 raise typer.BadParameter(
                     f"{model} supports controllable Tinker reasoning; it is not a mandatory-reasoning route"
                 )
+            if reasoning_effort is not None and reasoning_mode == "disabled":
+                raise typer.BadParameter("A reasoning effort cannot be selected when reasoning is disabled")
             reasoning_enabled = reasoning_mode != "disabled"
+            selected_reasoning_effort = reasoning_effort or "high"
             reasoning_configuration = ReasoningConfiguration(
                 enabled=reasoning_enabled,
                 supported_efforts=["low", "medium", "high", "xhigh", "max"],
-                selected_effort="high" if reasoning_enabled else None,
+                selected_effort=selected_reasoning_effort if reasoning_enabled else None,
                 request_parameter=(
-                    {"output_config": {"effort": "high"}} if reasoning_enabled else {"thinking": {"type": "disabled"}}
+                    {"output_config": {"effort": selected_reasoning_effort}}
+                    if reasoning_enabled
+                    else {"thinking": {"type": "disabled"}}
                 ),
-                source="tinker-catalog" if reasoning_mode == "auto" else "curator-override",
+                source=(
+                    "tinker-catalog"
+                    if reasoning_mode == "auto" and reasoning_effort is None
+                    else "curator-override"
+                ),
             )
             openrouter_routing_configuration = None
             endpoint = TINKER_ANTHROPIC_ENDPOINT
@@ -2648,6 +2676,8 @@ def run_model(
             effective_cost_usd = max_cost_usd or 5.0
             if reasoning_mode == "disabled":
                 raise typer.BadParameter(f"{model} is an explicit reasoning model and cannot disable reasoning")
+            if reasoning_effort is not None:
+                raise typer.BadParameter(f"{model} does not expose a configurable reasoning effort on this provider")
             reasoning_configuration = ReasoningConfiguration(
                 enabled=True,
                 mandatory=True,

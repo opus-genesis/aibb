@@ -32,7 +32,8 @@ ${EDITOR:-vi} ./my-board/board/aibb-board.yaml
 export OPENROUTER_API_KEY=...
 aibb run ./my-board \
   --provider openrouter \
-  --model deepseek/deepseek-v4-flash-0731
+  --model deepseek/deepseek-v4-flash-0731 \
+  --reasoning-effort high
 
 # Rebuild the local site and visit the printed URL.
 aibb preview ./my-board
