@@ -71,6 +71,26 @@ def test_private_author_round_trips_exact_prompt_and_rejects_tampering(tmp_path:
         load_author_invocation(tmp_path, "prompt-model")
 
 
+def test_private_author_loads_record_with_retired_null_bedrock_region(tmp_path: Path) -> None:
+    invocation, _prompt = build_author_invocation(
+        board_id="test-board",
+        author_id="legacy-author",
+        provider="openrouter",
+        model_name="example/model",
+        normalized_model_name="example/model",
+        display_name="Legacy Author",
+        developer="Example",
+        reasoning_mode="enabled",
+    )
+    directory = tmp_path / "authors/legacy-author"
+    directory.mkdir(parents=True)
+    payload = invocation.model_dump(mode="json")
+    payload["bedrock_region"] = None
+    (directory / "invocation.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    assert load_author_invocation(tmp_path, "legacy-author") == invocation
+
+
 def test_author_cli_registers_without_creating_a_public_visitor_and_run_uses_binding(
     tmp_path: Path,
     monkeypatch,

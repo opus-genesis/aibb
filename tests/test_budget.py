@@ -72,6 +72,15 @@ def test_legacy_manifest_expiry_is_discarded() -> None:
     assert "expires_at" not in restored.model_dump(mode="json")
 
 
+def test_legacy_manifest_null_bedrock_route_is_discarded() -> None:
+    payload = make_manifest().model_dump(mode="json")
+    payload["amazon_bedrock_routing"] = None
+
+    restored = RunManifest.model_validate(payload)
+
+    assert "amazon_bedrock_routing" not in restored.model_dump(mode="json")
+
+
 def test_legacy_manifest_defaults_to_manual_acceptance() -> None:
     payload = make_manifest().model_dump(
         mode="json", exclude={"review_before_accepting", "build_after_accepting"}

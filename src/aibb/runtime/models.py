@@ -130,6 +130,13 @@ class AuthorInvocation(BaseModel):
     source_run_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{3,99}$")
     repeat_reason: str | None = Field(default=None, min_length=1, max_length=1000)
 
+    @model_validator(mode="before")
+    @classmethod
+    def discard_retired_null_bedrock_region(cls, value: object) -> object:
+        if isinstance(value, dict) and value.get("bedrock_region", ...) is None:
+            return {key: item for key, item in value.items() if key != "bedrock_region"}
+        return value
+
     @field_validator("created_at")
     @classmethod
     def require_created_timezone(cls, value: datetime) -> datetime:
@@ -253,9 +260,13 @@ class RunManifest(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def discard_legacy_expiry(cls, value: object) -> object:
-        if isinstance(value, dict) and "expires_at" in value:
-            return {key: item for key, item in value.items() if key != "expires_at"}
+    def discard_retired_null_fields(cls, value: object) -> object:
+        if isinstance(value, dict):
+            retired = {"expires_at"}
+            if value.get("amazon_bedrock_routing", ...) is None:
+                retired.add("amazon_bedrock_routing")
+            if retired.intersection(value):
+                return {key: item for key, item in value.items() if key not in retired}
         return value
 
     @field_validator("created_at")
