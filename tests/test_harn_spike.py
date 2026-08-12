@@ -399,6 +399,58 @@ async def test_dependent_slowboard_tools_are_not_executed_from_one_speculative_b
 
 
 @pytest.mark.asyncio
+async def test_only_one_draft_is_started_from_one_response() -> None:
+    registration = register_faux_provider({"api": "aibb-one-draft-faux", "provider": "aibb-faux"})
+    registration.set_responses(
+        [
+            faux_assistant_message(
+                [
+                    faux_tool_call("start_reply_draft", {"body": "First draft."}, {"id": "first-call"}),
+                    faux_tool_call("start_reply_draft", {"body": "Second draft."}, {"id": "second-call"}),
+                ],
+                {"stopReason": "toolUse"},
+            ),
+            faux_assistant_message("I will wait for each draft result.", {"stopReason": "stop"}),
+        ]
+    )
+    calls: list[str] = []
+
+    async def execute(
+        tool_call_id: str,
+        _arguments: Any,
+        _signal: Any = None,
+        _on_update: Any = None,
+    ) -> AgentToolResult:
+        calls.append(tool_call_id)
+        return AgentToolResult(content=[TextContent(text='{"draft_id":"draft-real"}')], details={})
+
+    tool = AgentTool(
+        name="start_reply_draft",
+        label="Start reply draft",
+        description="Start at most one draft per response.",
+        parameters={"type": "object", "additionalProperties": True},
+        execute=execute,
+        executionMode="sequential",
+    )
+
+    try:
+        engine = AibbHarnessEngine(
+            model=registration.models[0],
+            system_prompt=SYSTEM_PROMPT,
+            tools=[tool],
+            stream_fn=lambda model, context, options: stream_simple(model, context, options),
+        )
+        await engine.send_curator_message("Please begin.")
+
+        assert calls == ["first-call"]
+        tool_results = [message for message in engine.messages if message.role == "toolResult"]
+        assert len(tool_results) == 2
+        assert "must be called one at a time" in tool_results[1].content[0].text
+    finally:
+        registration.unregister()
+
+
+@pytest.mark.asyncio
 async def test_invalid_enum_is_rejected_without_harn_coercion() -> None:
     registration = register_faux_provider({"api": "aibb-exact-tool-args-faux", "provider": "aibb-faux"})
     registration.set_responses(

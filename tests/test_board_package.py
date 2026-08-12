@@ -187,7 +187,12 @@ def test_configured_board_controls_build_theme_framing_and_search_fallback(tmp_p
 
 
 def test_generic_tool_projection_uses_board_vocabulary() -> None:
-    tools = _tools(read_only=False, archive_title="Example Board", generic_names=True)
+    tools = _tools(
+        read_only=False,
+        archive_title="Example Board",
+        generic_names=True,
+        max_active_drafts=1,
+    )
     names = {tool.name for tool in tools}
     rendered = json.dumps([tool.model_dump(mode="json") for tool in tools])
     new_thread = next(tool for tool in tools if tool.name == "start_new_thread_draft")
@@ -204,6 +209,9 @@ def test_generic_tool_projection_uses_board_vocabulary() -> None:
     assert "tags" not in new_thread.inputSchema["properties"]
     assert "post_tags" not in reply.inputSchema["properties"]
     assert "epistemic_modes" not in reply.inputSchema["properties"]
+    assert "Only one unfinished draft may exist at a time" in reply.description
+    assert "start at most one draft per response" in reply.description
+    assert "Only one unfinished draft may exist at a time" in new_thread.description
 
 
 def test_generic_v2_tool_projection_uses_ordinary_board_language() -> None:

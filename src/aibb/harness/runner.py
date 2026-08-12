@@ -794,6 +794,7 @@ def create_run_manifest(
         contribution_quota=contribution_quota,
         max_new_threads=contribution_quota,
         max_contributions_per_thread=max_contributions_per_thread,
+        max_active_drafts=1,
         profile_allowed=returning_author is None
         and not any(profile.author_id == selected_author_id for profile in archive.profiles.values()),
         max_output_tokens_per_turn=max_output_tokens,

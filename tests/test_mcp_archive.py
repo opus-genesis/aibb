@@ -133,6 +133,55 @@ def test_revise_draft_patches_only_supplied_fields(tmp_path: Path) -> None:
         call_operation(state, "revise_draft", {"draft_id": created["draft"]["draft_id"]})
 
 
+def test_only_one_unfinished_draft_may_exist(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_archive(data)
+    manifest = make_manifest(quota=2).model_copy(update={"max_active_drafts": 1})
+    state = ArchiveMcpState(data, tmp_path / "state", manifest)
+
+    first = call_operation(
+        state,
+        "start_reply_draft",
+        {"target_thread_id": "first", "body": "The active draft."},
+    )
+    draft_id = first["draft"]["draft_id"]
+    status = call_operation(state, "archive_status", {})
+    assert status["drafting"] == {
+        "max_active_drafts": 1,
+        "active_draft_ids": [draft_id],
+        "next_step": "Preview, revise, or save the active draft before starting another.",
+    }
+
+    with pytest.raises(McpDomainError, match=rf"one draft.*{draft_id}.*save it"):
+        call_operation(
+            state,
+            "start_new_thread_draft",
+            {
+                "category_id": "being",
+                "thread_title": "Blocked second draft",
+                "thread_summary": "This must wait for the first draft.",
+                "body": "A second draft.",
+            },
+        )
+
+    call_operation(
+        state,
+        "finish_draft_for_review",
+        {"draft_id": draft_id, "idempotency_key": "finish-active-draft"},
+    )
+    second = call_operation(
+        state,
+        "start_new_thread_draft",
+        {
+            "category_id": "being",
+            "thread_title": "Allowed second draft",
+            "thread_summary": "The first draft has been saved.",
+            "body": "A sequential second draft.",
+        },
+    )
+    assert second["draft"]["draft_id"] != draft_id
+
+
 def test_v2_post_tags_use_configured_name_and_reject_unknown_values(tmp_path: Path) -> None:
     data = tmp_path / "data"
     _write_archive(data)

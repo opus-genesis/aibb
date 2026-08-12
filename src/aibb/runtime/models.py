@@ -230,6 +230,7 @@ class RunManifest(BaseModel):
     allowed_categories: list[str] | None = None
     max_body_chars: int = Field(default=40_000, ge=1)
     max_references: int = Field(default=20, ge=0)
+    max_active_drafts: int | None = Field(default=None, ge=1)
     profile_allowed: bool = True
     max_output_tokens_per_turn: int = Field(default=16_000, ge=1)
     model_context_window: int | None = Field(default=None, ge=1)

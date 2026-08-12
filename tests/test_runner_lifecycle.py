@@ -302,6 +302,7 @@ def test_run_defaults_to_headless_live_watch_and_accepts_reasoning_effort(
     manifest = RunManifest.load(Path(run_kwargs["run_dir"]) / "manifest.json")
     assert manifest.mode == "headless"
     assert manifest.aibb_version == __version__
+    assert manifest.max_active_drafts == 1
     assert manifest.reasoning.selected_effort == "high"
     assert manifest.reasoning.request_parameter == {"effort": "high", "exclude": False}
     assert manifest.reasoning.source == "curator-override"

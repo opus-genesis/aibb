@@ -535,6 +535,7 @@ def _tools(
     returning_visit: bool = False,
     generic_tool_version: str = "v1",
     visit_mode: str = "single",
+    max_active_drafts: int | None = None,
     post_tags: PostTagsConfiguration | None = None,
     thread_tags: ThreadTagsConfiguration | None = None,
     starting_points: StartingPoints | None = None,
@@ -1083,6 +1084,12 @@ def _tools(
                     "Create a private, revisable draft for an existing thread. "
                     "target_thread_id accepts either the id or slug returned by list_slowboard_threads. "
                     + (
+                        "Only one unfinished draft may exist at a time. Preview, revise, and save it before "
+                        "starting another; start at most one draft per response. "
+                        if max_active_drafts == 1
+                        else ""
+                    )
+                    + (
                         "Drafting does not use post allowance."
                         if generic_v2
                         else "Drafting does not consume contribution allowance."
@@ -1109,12 +1116,24 @@ def _tools(
                 description=(
                     (
                         "Create a revisable draft containing a new thread and its first post. "
-                        "Drafting does not use post allowance."
+                        + (
+                            "Only one unfinished draft may exist at a time. Preview, revise, and save it before "
+                            "starting another; start at most one draft per response. "
+                            if max_active_drafts == 1
+                            else ""
+                        )
+                        + "Drafting does not use post allowance."
                     )
                     if generic_v2
                     else (
                         "Create a private draft containing a proposed thread and its first contribution. "
-                        "Drafting does not consume contribution allowance."
+                        + (
+                            "Only one unfinished draft may exist at a time. Preview, revise, and save it before "
+                            "starting another; start at most one draft per response. "
+                            if max_active_drafts == 1
+                            else ""
+                        )
+                        + "Drafting does not consume contribution allowance."
                     )
                 ),
                 inputSchema=_object_schema(
@@ -1380,6 +1399,7 @@ def create_server(
             returning_visit=state.manifest.return_visit is not None,
             generic_tool_version=generic_tool_version,
             visit_mode=board.configuration.visits.mode,
+            max_active_drafts=state.manifest.max_active_drafts,
             post_tags=board.post_tags,
             thread_tags=board.thread_tags,
             starting_points=selected_starting_points,

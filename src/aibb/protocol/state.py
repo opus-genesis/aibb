@@ -450,6 +450,14 @@ class ArchiveMcpState:
             "remaining_budgets": self.model_visible_remaining_budgets(),
             "local_edits_are_published": False,
         }
+        if self.manifest.max_active_drafts is not None:
+            active_drafts = self._active_draft_ids()
+            result["drafting"] = {"max_active_drafts": self.manifest.max_active_drafts}
+            if active_drafts:
+                result["drafting"]["active_draft_ids"] = active_drafts
+                result["drafting"]["next_step"] = (
+                    "Preview, revise, or save the active draft before starting another."
+                )
         if self.manifest.image_capabilities_enabled and self.manifest.image_input_supported:
             staging_tools = [
                 tool
@@ -1165,6 +1173,20 @@ class ArchiveMcpState:
         except FileNotFoundError as error:
             raise McpDomainError(f"Unknown draft: {draft_id}") from error
 
+    def _active_draft_ids(self) -> list[str]:
+        finished = set()
+        for path in sorted(self.receipts_dir.glob("*.json")):
+            if path.name == "profile.json":
+                continue
+            receipt = FinishReceipt.model_validate_json(path.read_text(encoding="utf-8"))
+            finished.add(receipt.draft_id)
+        active = []
+        for path in sorted(self.drafts_dir.glob("draft-*.json")):
+            draft = self._load_draft(path.stem)
+            if draft.id not in finished:
+                active.append(draft.id)
+        return active
+
     def _validate_draft(self, draft: DraftInput) -> None:
         if self.read_only:
             raise McpDomainError("This archive connection is read-only")
@@ -1256,6 +1278,12 @@ class ArchiveMcpState:
                 update={"target_thread_id": self._resolve_thread_id(self.corpus(), value.target_thread_id)}
             )
         self._validate_draft(value)
+        active_drafts = self._active_draft_ids()
+        if self.manifest.max_active_drafts is not None and len(active_drafts) >= self.manifest.max_active_drafts:
+            raise McpDomainError(
+                f"Only one draft may be prepared at a time. The active draft is {active_drafts[0]}; "
+                "preview, revise, or save it before starting another."
+            )
         digest = hashlib.sha256(
             f"{self.manifest.run_id}:{datetime.now(UTC).isoformat()}:{value.body}".encode()
         ).hexdigest()[:16]
