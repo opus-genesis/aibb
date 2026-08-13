@@ -29,9 +29,11 @@ _BLOCK_TOKENS = {
     "list_item_open",
     "list_item_close",
     "fence",
+    "code_block",
 }
 _INLINE_TOKENS = {
     "text",
+    "code_inline",
     "softbreak",
     "em_open",
     "em_close",
