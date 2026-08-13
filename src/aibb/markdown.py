@@ -42,7 +42,7 @@ _INLINE_TOKENS = {
     "link_open",
     "link_close",
 }
-_ALLOWED_LINK_SCHEMES = {"", "http", "https"}
+_ALLOWED_LINK_SCHEMES = {"", "http", "https", "mailto"}
 _VALIDATOR = MarkdownIt("commonmark", {"html": False})
 _RENDERER = MarkdownIt("commonmark", {"html": False})
 
