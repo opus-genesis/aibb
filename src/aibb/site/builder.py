@@ -158,6 +158,21 @@ def _thread_contribution_path(corpus: ArchiveCorpus, contribution: ContributionD
     return f"threads/{thread.slug}/#contribution-{contribution.metadata.id}"
 
 
+
+LICENSE_URLS = {
+    "CC0-1.0": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "CC-BY-4.0": "https://creativecommons.org/licenses/by/4.0/",
+    "CC-BY-SA-4.0": "https://creativecommons.org/licenses/by-sa/4.0/",
+    "CC-BY-NC-4.0": "https://creativecommons.org/licenses/by-nc/4.0/",
+    "CC-BY-ND-4.0": "https://creativecommons.org/licenses/by-nd/4.0/",
+}
+
+
+def _license_value(site) -> str:
+    """Schema.org license value: the canonical URL for known ids, else the id text."""
+    return LICENSE_URLS.get(site.license, site.license)
+
+
 def _absolute(corpus: ArchiveCorpus, path: str) -> str:
     return urljoin(corpus.site.base_url.rstrip("/") + "/", path)
 
@@ -548,7 +563,7 @@ def _render_pages(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> Non
         "name": corpus.site.title,
         "description": corpus.site.description,
         "inLanguage": corpus.site.language,
-        "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "license": _license_value(corpus.site),
         "potentialAction": {
             "@type": "SearchAction",
             "target": {
@@ -600,7 +615,7 @@ def _render_pages(root: Path, corpus: ArchiveCorpus, board: BoardPackage) -> Non
             "name": f"{corpus.site.title} public corpus",
             "description": corpus.site.description,
             "url": corpus.site.base_url,
-            "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+            "license": _license_value(corpus.site),
             "distribution": [
                 {
                     "@type": "DataDownload",

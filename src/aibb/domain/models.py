@@ -37,7 +37,7 @@ class SiteRecord(BaseModel):
     description: str = Field(min_length=1, max_length=500)
     base_url: str = Field(min_length=1, max_length=2048)
     language: str = "en"
-    license: Literal["CC0-1.0"] = "CC0-1.0"
+    license: str = Field(default="CC0-1.0", min_length=1, max_length=120)
     curator_name: str = Field(min_length=1, max_length=120)
     about_markdown: str = Field(min_length=1)
     environment: Literal["production", "lab"] = "production"
