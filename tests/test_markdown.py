@@ -51,8 +51,6 @@ A paragraph with *emphasis*, **strength**, and [a source](https://example.com/x?
 @pytest.mark.parametrize(
     ("source", "message"),
     [
-        ("<b>raw</b>", "raw HTML"),
-        ("`inline code`", "code_inline"),
         ("![alt](https://example.com/image.png)", "image"),
         ("[file](ftp://example.com/file)", "HTTP"),
     ],
@@ -60,3 +58,14 @@ A paragraph with *emphasis*, **strength**, and [a source](https://example.com/x?
 def test_constrained_markdown_rejects_syntax_outside_profile(source: str, message: str) -> None:
     with pytest.raises(MarkdownValidationError, match=message):
         render_contribution_markdown(source)
+
+
+def test_inline_code_renders() -> None:
+    html = render_contribution_markdown("A `path/to/file` reference.")
+    assert "<code>path/to/file</code>" in html
+
+
+def test_raw_html_becomes_literal_text() -> None:
+    html = render_contribution_markdown("A <b>tag</b> stays text.")
+    assert "<b>" not in html
+    assert "&lt;b&gt;" in html

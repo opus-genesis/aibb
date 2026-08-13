@@ -43,7 +43,7 @@ _INLINE_TOKENS = {
     "link_close",
 }
 _ALLOWED_LINK_SCHEMES = {"", "http", "https"}
-_VALIDATOR = MarkdownIt("commonmark", {"html": True})
+_VALIDATOR = MarkdownIt("commonmark", {"html": False})
 _RENDERER = MarkdownIt("commonmark", {"html": False})
 
 
